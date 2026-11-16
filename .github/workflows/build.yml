@@ -32,10 +32,25 @@ jobs:
           mv pubspec.yaml.bak pubspec.yaml
           mv main.dart.bak lib/main.dart
 
-      - name: Configure Android SDK 36 & Disable Buggy Lint Tasks
+      - name: Configure Browser Intent, SDK 36 & Disable Lint
         run: |
           sed -i 's/android:label="study_browser"/android:label="Study Browser"/g' android/app/src/main/AndroidManifest.xml
           sed -i 's/<application/<uses-permission android:name="android.permission.INTERNET"\/>\n    <application android:usesCleartextTraffic="true"/g' android/app/src/main/AndroidManifest.xml
+          
+          # Study Browser को Realme की 'Default browser app' लिस्ट में जोड़ने के लिए Intent Filter
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if ! grep -q "android.intent.action.VIEW" "$MANIFEST"; then
+            sed -i '/<activity.*android:exported="true">/a \
+                  <intent-filter>\n\
+                      <action android:name="android.intent.action.VIEW" />\n\
+                      <category android:name="android.intent.category.DEFAULT" />\n\
+                      <category android:name="android.intent.category.BROWSABLE" />\n\
+                      <data android:scheme="http" />\n\
+                      <data android:scheme="https" />\n\
+                  </intent-filter>' "$MANIFEST"
+          fi
+
+          # SDK 36 सेटिंग्स
           if [ -f android/app/build.gradle ]; then
             sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle
             sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle
@@ -43,20 +58,13 @@ jobs:
           if [ -f android/app/build.gradle.kts ]; then
             sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle.kts
           fi
+
+          # फालतू Lint एरर रोकने के लिए
           if [ -f android/build.gradle ]; then
             cat << 'EOF' >> android/build.gradle
           tasks.whenTaskAdded { task ->
               if (task.name.contains("lintVital")) {
                   task.enabled = false
-              }
-          }
-          EOF
-          fi
-          if [ -f android/build.gradle.kts ]; then
-            cat << 'EOF' >> android/build.gradle.kts
-          tasks.configureEach {
-              if (name.contains("lintVital", ignoreCase = true)) {
-                  enabled = false
               }
           }
           EOF
