@@ -315,7 +315,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     await prefs.setString('bookmarks', jsonEncode(_bookmarks));
   }
 
-  void _initWebView() {
+   void _initWebView() {
     _webController = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(const Color(0xFF0F172A))
@@ -336,6 +336,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 _urlController.text = url;
               });
             }
+            // ⚠️ यहाँ बाहरी और अंदरूनी दोनों लिंक्स के लिए लॉक चेक किया जाता है
             _checkAndBlockUrl(url);
             _injectFocusScripts();
           },
@@ -356,6 +357,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             }
           },
           onNavigationRequest: (request) {
+            // ⚠️ यहाँ हर क्लिक और रीडायरेक्ट पर आपके Lock & Whitelist नियम लागू होंगे
             final decision = _evaluateUrl(request.url);
             if (!decision) {
               return NavigationDecision.prevent;
@@ -366,6 +368,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       )
       ..loadRequest(Uri.parse('https://www.google.com'));
   }
+
 
   Future<void> _injectFocusScripts() async {
     try {
