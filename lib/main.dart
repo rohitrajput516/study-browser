@@ -986,8 +986,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                   side: const BorderSide(color: Color(0xFF2E3646), width: 1),
                 ),
                 child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    width: 285,
+                  constraints: BoxConstraints.tightFor(
+                      width: 285,
+                      )
                     maxHeight: MediaQuery.of(context).size.height * 0.82,
                   ),
                   child: Column(
