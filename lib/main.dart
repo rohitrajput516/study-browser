@@ -120,13 +120,19 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   String _blockedReason = '';
   LockGroup? _blockingGroup;
 
-  // Raw JS for hiding YouTube Shorts, Home Feed, and Instagram Reels
+  // Raw JS for hiding YouTube Shorts, Home Feed, Instagram Reels & fixing target="_blank" links
   static const String _focusFilterJs = r'''
     (function() {
       if (window.__SB_INTERVAL_SET) return;
       window.__SB_INTERVAL_SET = true;
 
       function applyFocusRules() {
+        // Fix links that try to open in a new tab/window (target="_blank")
+        var blankLinks = document.querySelectorAll('a[target="_blank"]');
+        for (var i = 0; i < blankLinks.length; i++) {
+          blankLinks[i].removeAttribute('target');
+        }
+
         var host = window.location.hostname || '';
         var path = window.location.pathname || '';
 
@@ -213,19 +219,39 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   void initState() {
     super.initState();
     _initWebView();
-    _loadSavedData().then((_) {
-      _checkIncomingIntentUrl();
+    _setupIntentListener();
+    _startupSequence();
+  }
+
+  void _setupIntentListener() {
+    // जब ऐप पहले से बैकग्राउंड में खुला हो और बाहर से किसी लिंक पर क्लिक किया जाए
+    _intentChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onNewUrl') {
+        final String? newUrl = call.arguments as String?;
+        if (newUrl != null && newUrl.trim().isNotEmpty) {
+          _loadFromSearchBar(newUrl.trim());
+        }
+      }
     });
   }
 
-  Future<void> _checkIncomingIntentUrl() async {
+  Future<void> _startupSequence() async {
+    // 1. पहले सारे सेव किए गए लॉक्स और सेटिंग्स लोड करें
+    await _loadSavedData();
+
+    // 2. चेक करें कि क्या ऐप किसी बाहरी लिंक (WhatsApp/Telegram) पर टैप करने से खुला है
+    String? incomingUrl;
     try {
-      final String? incomingUrl =
+      incomingUrl =
           await _intentChannel.invokeMethod<String>('getInitialUrl');
-      if (incomingUrl != null && incomingUrl.trim().isNotEmpty) {
-        _loadFromSearchBar(incomingUrl);
-      }
     } catch (_) {}
+
+    // 3. अगर बाहरी लिंक है तो सीधा वही खोलें (लॉक चेक के साथ), वरना Google खोलें
+    if (incomingUrl != null && incomingUrl.trim().isNotEmpty) {
+      _loadFromSearchBar(incomingUrl.trim());
+    } else {
+      _loadFromSearchBar('https://www.google.com');
+    }
   }
 
   String _hashPassword(String input) {
@@ -315,7 +341,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     await prefs.setString('bookmarks', jsonEncode(_bookmarks));
   }
 
-   void _initWebView() {
+  void _initWebView() {
     _webController = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(const Color(0xFF0F172A))
@@ -336,7 +362,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 _urlController.text = url;
               });
             }
-            // ⚠️ यहाँ बाहरी और अंदरूनी दोनों लिंक्स के लिए लॉक चेक किया जाता है
             _checkAndBlockUrl(url);
             _injectFocusScripts();
           },
@@ -357,7 +382,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             }
           },
           onNavigationRequest: (request) {
-            // ⚠️ यहाँ हर क्लिक और रीडायरेक्ट पर आपके Lock & Whitelist नियम लागू होंगे
             final decision = _evaluateUrl(request.url);
             if (!decision) {
               return NavigationDecision.prevent;
@@ -365,10 +389,8 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             return NavigationDecision.navigate;
           },
         ),
-      )
-      ..loadRequest(Uri.parse('https://www.google.com'));
+      );
   }
-
 
   Future<void> _injectFocusScripts() async {
     try {
@@ -413,6 +435,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     final uri = Uri.tryParse(url);
     if (uri == null) return true;
     final scheme = uri.scheme.toLowerCase();
+    if (scheme == 'about' || scheme == 'data' || scheme == 'blob') return true;
     if (scheme != 'http' && scheme != 'https') return false;
 
     final host = uri.host.toLowerCase();
@@ -493,7 +516,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     final trimmed = input.trim();
     if (trimmed.isEmpty) return;
 
-    setState(() => _isPageBlocked = false);
     String targetUrl;
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
       targetUrl = trimmed;
@@ -503,6 +525,19 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       targetUrl =
           'https://www.google.com/search?q=${Uri.encodeComponent(trimmed)}';
     }
+
+    if (mounted) {
+      setState(() {
+        _currentUrl = targetUrl;
+        _urlController.text = targetUrl;
+      });
+    }
+
+    // लोड करने से पहले ही लॉक नियम चेक करें
+    if (!_evaluateUrl(targetUrl)) {
+      return;
+    }
+
     _webController.loadRequest(Uri.parse(targetUrl));
   }
 
