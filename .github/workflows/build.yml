@@ -85,7 +85,7 @@ jobs:
                   android:usesCleartextTraffic="true">
 
                   <activity
-                      android:name=".MainActivity"
+                      android:name="com.vajra.studybrowser.MainActivity"
                       android:exported="true"
                       android:launchMode="singleTop"
                       android:theme="@style/LaunchTheme"
@@ -137,6 +137,10 @@ jobs:
           </manifest>
           EOF
 
+          # flutter create ne default MainActivity (package: com.vajra.studybrowser.study_browser)
+          # bana di hoti hai. Usse hatao taaki sirf hamari custom MainActivity bache.
+          find android/app/src/main \( -name 'MainActivity.kt' -o -name 'MainActivity.java' \) -delete
+
           mkdir -p android/app/src/main/kotlin/com/vajra/studybrowser
           cat << 'EOF' > android/app/src/main/kotlin/com/vajra/studybrowser/MainActivity.kt
           package com.vajra.studybrowser
@@ -167,6 +171,8 @@ jobs:
                           "getInitialUrl" -> {
                               val initialUrl = extractUrlFromIntent(intent)
                               intent?.data = null
+                              intent?.removeExtra("query")
+                              intent?.removeExtra(Intent.EXTRA_TEXT)
                               result.success(initialUrl)
                           }
                           else -> result.notImplemented()
@@ -211,6 +217,28 @@ jobs:
           }
           EOF
           fi
+
+      - name: Verify MainActivity Wiring (Link Receiver Check)
+        run: |
+          echo "--- MainActivity files ---"
+          find android/app/src/main -name 'MainActivity.*'
+          echo "--- namespace / applicationId ---"
+          grep -hE 'namespace|applicationId' android/app/build.gradle* || true
+          echo "--- manifest activity ---"
+          grep -n 'android:name=".*MainActivity"' android/app/src/main/AndroidManifest.xml
+
+          COUNT=$(find android/app/src/main -name 'MainActivity.*' | wc -l)
+          if [ "$COUNT" -ne 1 ]; then
+            echo "ERROR: exactly one MainActivity expected, found $COUNT"
+            exit 1
+          fi
+          grep -q 'android:name="com.vajra.studybrowser.MainActivity"' android/app/src/main/AndroidManifest.xml \
+            || { echo "ERROR: manifest does not point to com.vajra.studybrowser.MainActivity"; exit 1; }
+          grep -q '^package com.vajra.studybrowser$' android/app/src/main/kotlin/com/vajra/studybrowser/MainActivity.kt \
+            || { echo "ERROR: MainActivity.kt package mismatch"; exit 1; }
+          grep -q 'study_browser/intent' android/app/src/main/kotlin/com/vajra/studybrowser/MainActivity.kt \
+            || { echo "ERROR: intent channel missing in MainActivity.kt"; exit 1; }
+          echo "OK: custom MainActivity is wired correctly."
 
       - name: Get Packages & Build Release APK
         run: |
