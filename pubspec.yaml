@@ -1,0 +1,21 @@
+name: study_browser
+description: Privacy-First Study Browser with Custom Group Locks and Shorts Blocker.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  webview_flutter: ^4.8.0
+  shared_preferences: ^2.2.3
+  crypto: ^3.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
