@@ -109,7 +109,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> with WidgetsBindi
   ];
 
   List<LockGroup> _lockGroups = [];
-  List> _bookmarks = [];
+  List _bookmarks = [];
   List<String> _history = [];
 
   bool _isPageBlocked = false;
