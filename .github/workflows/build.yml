@@ -32,25 +32,142 @@ jobs:
           mv pubspec.yaml.bak pubspec.yaml
           mv main.dart.bak lib/main.dart
 
-      - name: Configure Browser Intent, SDK 36 & Disable Lint
+      - name: Set Custom App Logo (Error-Free Auto Resizer)
         run: |
-          sed -i 's/android:label="study_browser"/android:label="Study Browser"/g' android/app/src/main/AndroidManifest.xml
-          sed -i 's/<application/<uses-permission android:name="android.permission.INTERNET"\/>\n    <application android:usesCleartextTraffic="true"/g' android/app/src/main/AndroidManifest.xml
-          
-          # Study Browser को Realme की 'Default browser app' लिस्ट में जोड़ने के लिए Intent Filter
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-          if ! grep -q "android.intent.action.VIEW" "$MANIFEST"; then
-            sed -i '/<activity.*android:exported="true">/a \
-                  <intent-filter>\n\
-                      <action android:name="android.intent.action.VIEW" />\n\
-                      <category android:name="android.intent.category.DEFAULT" />\n\
-                      <category android:name="android.intent.category.BROWSABLE" />\n\
-                      <data android:scheme="http" />\n\
-                      <data android:scheme="https" />\n\
-                  </intent-filter>' "$MANIFEST"
+          sudo apt-get update && sudo apt-get install -y python3-pil
+          python3 - << 'EOF'
+          import os
+          from PIL import Image
+
+          logo_file = None
+          for name in ['logo.png', 'logo.jpg', 'logo.jpeg']:
+              if os.path.exists(name):
+                  logo_file = name
+                  break
+
+          if logo_file:
+              print(f"Applying custom logo from: {logo_file}")
+              img = Image.open(logo_file).convert("RGBA")
+              sizes = {
+                  'mipmap-mdpi': 48,
+                  'mipmap-hdpi': 72,
+                  'mipmap-xhdpi': 96,
+                  'mipmap-xxhdpi': 144,
+                  'mipmap-xxxhdpi': 192,
+              }
+              res_dir = 'android/app/src/main/res'
+              for folder, size in sizes.items():
+                  out_dir = os.path.join(res_dir, folder)
+                  os.makedirs(out_dir, exist_ok=True)
+                  resized = img.resize((size, size), Image.Resampling.LANCZOS)
+                  resized.save(os.path.join(out_dir, 'ic_launcher.png'), format='PNG')
+              print("All mipmap icons updated successfully!")
+          else:
+              print("No logo.png found in root folder, keeping default icon.")
+          EOF
+
+          # Android 8+ के डिफ़ॉल्ट Flutter वेक्टर आइकॉन को हटाना ताकि हमारा कस्टम लोगो दिखे
+          if [ -f "logo.png" ] || [ -f "logo.jpg" ] || [ -f "logo.jpeg" ]; then
+            rm -rf android/app/src/main/res/mipmap-anydpi-v26
           fi
 
-          # SDK 36 सेटिंग्स
+      - name: Configure Default Browser Manifest & Deep Link Receiver
+        run: |
+          # 1. पूरा AndroidManifest.xml साफ़ और सटीक तरीके से लिखना (Realme/Android 13-15 सपोर्ट के साथ)
+          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+
+              <application
+                  android:label="Study Browser"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher"
+                  android:usesCleartextTraffic="true">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+
+                      <meta-data
+                          android:name="io.flutter.embedding.android.NormalTheme"
+                          android:resource="@style/NormalTheme" />
+
+                      <!-- ऐप आइकॉन और लॉन्चर के लिए -->
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                          <category android:name="android.intent.category.APP_BROWSER"/>
+                      </intent-filter>
+
+                      <!-- Default Browser App लिस्ट में आने के लिए मुख्य नियम (HTTP/HTTPS) -->
+                      <intent-filter>
+                          <action android:name="android.intent.action.VIEW" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <category android:name="android.intent.category.BROWSABLE" />
+                          <data android:scheme="http" />
+                          <data android:scheme="https" />
+                      </intent-filter>
+
+                      <!-- वेब पेजों और HTML लिंक्स के लिए अतिरिक्त सपोर्ट -->
+                      <intent-filter>
+                          <action android:name="android.intent.action.VIEW" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <category android:name="android.intent.category.BROWSABLE" />
+                          <data android:scheme="http" />
+                          <data android:scheme="https" />
+                          <data android:mimeType="text/html" />
+                          <data android:mimeType="text/plain" />
+                          <data android:mimeType="application/xhtml+xml" />
+                      </intent-filter>
+
+                      <!-- वेब सर्च इंटेंट सपोर्ट -->
+                      <intent-filter>
+                          <action android:name="android.intent.action.WEB_SEARCH" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <category android:name="android.intent.category.BROWSABLE" />
+                      </intent-filter>
+
+                  </activity>
+
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2" />
+              </application>
+          </manifest>
+          EOF
+
+          # 2. MainActivity.kt को अपडेट करना ताकि बाहर से क्लिक किए गए लिंक सीधे Study Browser में खुलें
+          mkdir -p android/app/src/main/kotlin/com/vajra/studybrowser
+          cat << 'EOF' > android/app/src/main/kotlin/com/vajra/studybrowser/MainActivity.kt
+          package com.vajra.studybrowser
+
+          import io.flutter.embedding.android.FlutterActivity
+          import io.flutter.embedding.engine.FlutterEngine
+          import io.flutter.plugin.common.MethodChannel
+
+          class MainActivity: FlutterActivity() {
+              override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+                  super.configureFlutterEngine(flutterEngine)
+                  MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "study_browser/intent")
+                      .setMethodCallHandler { call, result ->
+                          if (call.method == "getInitialUrl") {
+                              result.success(intent?.dataString)
+                          } else {
+                              result.notImplemented()
+                          }
+                      }
+              }
+          }
+          EOF
+
+          # 3. SDK 36 सेटिंग्स
           if [ -f android/app/build.gradle ]; then
             sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle
             sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle
@@ -59,7 +176,7 @@ jobs:
             sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle.kts
           fi
 
-          # फालतू Lint एरर रोकने के लिए
+          # 4. फालतू Lint एरर रोकने के लिए
           if [ -f android/build.gradle ]; then
             cat << 'EOF' >> android/build.gradle
           tasks.whenTaskAdded { task ->

@@ -85,6 +85,9 @@ class BrowserHomeScreen extends StatefulWidget {
 }
 
 class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
+  static const MethodChannel _intentChannel =
+      MethodChannel('study_browser/intent');
+
   late final WebViewController _webController;
   final TextEditingController _urlController = TextEditingController();
 
@@ -209,8 +212,20 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   @override
   void initState() {
     super.initState();
-    _loadSavedData();
     _initWebView();
+    _loadSavedData().then((_) {
+      _checkIncomingIntentUrl();
+    });
+  }
+
+  Future<void> _checkIncomingIntentUrl() async {
+    try {
+      final String? incomingUrl =
+          await _intentChannel.invokeMethod<String>('getInitialUrl');
+      if (incomingUrl != null && incomingUrl.trim().isNotEmpty) {
+        _loadFromSearchBar(incomingUrl);
+      }
+    } catch (_) {}
   }
 
   String _hashPassword(String input) {
@@ -251,7 +266,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         final List decoded = jsonDecode(groupsJson);
         _lockGroups = decoded.map((e) => LockGroup.fromJson(e)).toList();
       } else {
-        // Default Starter Groups (Unlocked initially)
         _lockGroups = [
           LockGroup(
             id: 'distraction',
@@ -384,7 +398,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     if (cleanHost == cleanRule || cleanHost.endsWith('.$cleanRule')) {
       return true;
     }
-    // Proxy / Google Translate bypass protection
     final cleanRuleHyphen = cleanRule.replaceAll('.', '-');
     if (fullUrl.toLowerCase().contains(cleanRule) ||
         cleanHost.contains(cleanRuleHyphen)) {
@@ -503,7 +516,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     );
   }
 
-  // Dialog to Verify Password (with 10-Min Temp Unlock option)
   Future<String?> _promptPasswordVerification({
     required String title,
     required String expectedHash,
@@ -581,7 +593,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     );
   }
 
-  // Dialog to Set a New Password (with 1-Tap Random Generator for Time-Vault)
   Future<String?> _promptSetNewPassword(String label) async {
     final passCtrl = TextEditingController();
     bool obscure = false;
@@ -630,7 +641,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                     final rndPass = _generateRandomPassword();
                     setDialogState(() {
                       passCtrl.text = rndPass;
-                      obscure = true; // ताकि याद न रहे
+                      obscure = true;
                     });
                     Clipboard.setData(ClipboardData(text: rndPass));
                     _showToast(
@@ -684,7 +695,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
               required bool currentValue,
               required Function(bool) onChanged,
             }) async {
-              // Turning ON is always instant without password
               if (!currentValue) {
                 setState(() => onChanged(true));
                 setSheetState(() {});
@@ -692,7 +702,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 _injectFocusScripts();
                 return;
               }
-              // Turning OFF requires password if Feature Lock is set
               if (_isFeatureLockActive) {
                 final res = await _promptPasswordVerification(
                   title: 'Feature Lock पासवर्ड',
@@ -736,7 +745,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 ),
                 const Divider(color: Colors.white24),
 
-                // SECTION 1: FEATURE LOCKS (YOUTUBE & INSTAGRAM)
+                // SECTION 1: FEATURE LOCKS
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
@@ -1252,7 +1261,8 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                       ),
                       onTap: () {
                         Navigator.pop(ctx);
-                        _loadFromSearchBar(bm['url'] ?? 'https://www.google.com');
+                        _loadFromSearchBar(
+                            bm['url'] ?? 'https://www.google.com');
                       },
                     );
                   },
