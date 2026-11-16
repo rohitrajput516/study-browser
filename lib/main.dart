@@ -109,7 +109,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   ];
 
   List<LockGroup> _lockGroups = [];
-  List> _bookmarks = [];
+  List _bookmarks = [];
 
   // Blocked Screen Overlay State
   bool _isPageBlocked = false;
