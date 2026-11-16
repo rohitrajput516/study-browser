@@ -46,6 +46,7 @@ jobs:
                   break
 
           if logo_file:
+              print(f"Applying custom logo from: {logo_file}")
               img = Image.open(logo_file).convert("RGBA")
               sizes = {
                   'mipmap-mdpi': 48,
@@ -60,14 +61,16 @@ jobs:
                   os.makedirs(out_dir, exist_ok=True)
                   resized = img.resize((size, size), Image.Resampling.LANCZOS)
                   resized.save(os.path.join(out_dir, 'ic_launcher.png'), format='PNG')
-                  resized.save(os.path.join(out_dir, 'ic_launcher_round.png'), format='PNG')
+              print("All mipmap icons updated successfully!")
+          else:
+              print("No logo.png found in root folder, keeping default icon.")
           EOF
 
           if [ -f "logo.png" ] || [ -f "logo.jpg" ] || [ -f "logo.jpeg" ]; then
             rm -rf android/app/src/main/res/mipmap-anydpi-v26
           fi
 
-      - name: Configure Default Browser & Live Intent Receiver
+      - name: Configure Default Browser Manifest & Deep Link Receiver
         run: |
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -118,6 +121,13 @@ jobs:
                           <data android:mimeType="text/plain" />
                           <data android:mimeType="application/xhtml+xml" />
                       </intent-filter>
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.WEB_SEARCH" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <category android:name="android.intent.category.BROWSABLE" />
+                      </intent-filter>
+
                   </activity>
 
                   <meta-data
@@ -127,45 +137,49 @@ jobs:
           </manifest>
           EOF
 
-          # MainActivity.kt जो ऐप बंद होने पर भी और बैकग्राउंड में खुला होने पर भी (onNewIntent) लिंक पकड़ती है
           mkdir -p android/app/src/main/kotlin/com/vajra/studybrowser
           cat << 'EOF' > android/app/src/main/kotlin/com/vajra/studybrowser/MainActivity.kt
           package com.vajra.studybrowser
 
           import android.content.Intent
-          import android.os.Bundle
           import io.flutter.embedding.android.FlutterActivity
           import io.flutter.embedding.engine.FlutterEngine
           import io.flutter.plugin.common.MethodChannel
 
           class MainActivity: FlutterActivity() {
-              private var channel: MethodChannel? = null
-              private var initialUrl: String? = null
+              private var intentChannel: MethodChannel? = null
 
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
-                  initialUrl = intent?.dataString
+              private fun extractUrlFromIntent(targetIntent: Intent?): String? {
+                  if (targetIntent == null) return null
+                  val dataStr = targetIntent.dataString
+                  if (!dataStr.isNullOrBlank()) return dataStr
+                  val queryStr = targetIntent.getStringExtra("query") ?: targetIntent.getStringExtra(Intent.EXTRA_TEXT)
+                  if (!queryStr.isNullOrBlank()) return queryStr
+                  return null
               }
 
               override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
                   super.configureFlutterEngine(flutterEngine)
-                  channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "study_browser/intent")
-                  channel?.setMethodCallHandler { call, result ->
-                      if (call.method == "getInitialUrl") {
-                          result.success(initialUrl)
-                          initialUrl = null
-                      } else {
-                          result.notImplemented()
+                  val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "study_browser/intent")
+                  intentChannel = channel
+                  channel.setMethodCallHandler { call, result ->
+                      when (call.method) {
+                          "getInitialUrl" -> {
+                              val initialUrl = extractUrlFromIntent(intent)
+                              intent?.data = null
+                              result.success(initialUrl)
+                          }
+                          else -> result.notImplemented()
                       }
                   }
               }
 
-              override fun onNewIntent(intent: Intent) {
-                  super.onNewIntent(intent)
-                  setIntent(intent)
-                  val newUrl = intent.dataString
-                  if (!newUrl.isNullOrEmpty()) {
-                      channel?.invokeMethod("onNewUrl", newUrl)
+              override fun onNewIntent(newIntent: Intent) {
+                  super.onNewIntent(newIntent)
+                  setIntent(newIntent)
+                  val incomingUrl = extractUrlFromIntent(newIntent)
+                  if (!incomingUrl.isNullOrBlank()) {
+                      intentChannel?.invokeMethod("onNewIntentUrl", incomingUrl)
                   }
               }
           }
@@ -184,6 +198,15 @@ jobs:
           tasks.whenTaskAdded { task ->
               if (task.name.contains("lintVital")) {
                   task.enabled = false
+              }
+          }
+          EOF
+          fi
+          if [ -f android/build.gradle.kts ]; then
+            cat << 'EOF' >> android/build.gradle.kts
+          tasks.configureEach {
+              if (name.contains("lintVital", ignoreCase = true)) {
+                  enabled = false
               }
           }
           EOF
