@@ -127,6 +127,9 @@ class BrowserTab {
   String url;
   bool isIncognito;
   bool isDesktop;
+  int progress = 0;
+  bool bootstrapped = false;
+  late WebViewController controller;
 
   BrowserTab({
     required this.id,
@@ -148,12 +151,43 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   static const MethodChannel _intentChannel =
       MethodChannel('study_browser/intent');
 
-  static const String _mobileUserAgent =
-      'Mozilla/5.0 (Linux; Android 14; RMX3395) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36';
-  static const String _desktopUserAgent =
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+  // User-Agent (Chrome jaisa). Desktop mode mein desktop UA + wide viewport lagta hai.
+  String _mobileUserAgent =
+      'Mozilla/5.0 (Linux; Android 14; RMX3395) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36';
+  String _desktopUserAgent =
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
 
-  late final WebViewController _webController;
+  static const int _maxTabs = 10;
+  int _tabSeq = 0;
+  final FocusNode _urlFocus = FocusNode();
+
+  // Fullscreen video state
+  bool _fullscreenActive = false;
+  VoidCallback? _fullscreenHideCb;
+
+  // File types
+  static const List<String> _viewerExts = [
+    '.pdf',
+    '.doc',
+    '.docx',
+    '.ppt',
+    '.pptx',
+    '.xls',
+    '.xlsx',
+  ];
+  static const List<String> _downloadExts = [
+    '.zip',
+    '.rar',
+    '.7z',
+    '.apk',
+    '.tar',
+    '.gz',
+  ];
+  static const List<String> _mediaExts = ['.mp3', '.mp4'];
+
+  // Har tab ka apna WebViewController hai (asli multi-tab)
+  BrowserTab get _activeTab => _tabs[_activeTabIndex];
+  WebViewController get _webController => _activeTab.controller;
   final TextEditingController _urlController = TextEditingController();
   final TextEditingController _findController = TextEditingController();
 
@@ -165,8 +199,8 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   String _pageTitle = 'Google';
 
   // Browser Enhancements State
-  bool _isDesktopMode = false;
-  bool _isIncognito = false;
+  bool get _isDesktopMode => _tabs.isNotEmpty && _activeTab.isDesktop;
+  bool get _isIncognito => _tabs.isNotEmpty && _activeTab.isIncognito;
   bool _isReadingMode = false;
   bool _showFindBar = false;
   bool _showZoomBar = false;
@@ -187,6 +221,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     'google.com',
     'google.co.in',
     'youtube.com',
+    'youtu.be',
     'wikipedia.org',
     'ncert.nic.in',
     'upsc.gov.in',
@@ -207,26 +242,47 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
 
   static const String _focusFilterJs = r'''
     (function() {
+      function sbViewport() {
+        var head = document.head || document.documentElement;
+        if (!head) return;
+        var metas = document.querySelectorAll('meta[name="viewport"]');
+        var vp = metas.length ? metas[0] : null;
+        if (window.__SB_DESKTOP_MODE) {
+          var sw = (window.screen && window.screen.width) ? window.screen.width : 412;
+          var scale = Math.min(1, sw / 1280);
+          var want = 'width=1280, initial-scale=' + scale.toFixed(3) + ', minimum-scale=0.1, maximum-scale=5, user-scalable=yes';
+          if (!vp) {
+            vp = document.createElement('meta');
+            vp.setAttribute('name', 'viewport');
+            head.appendChild(vp);
+          }
+          if (vp.getAttribute('content') !== want) {
+            vp.setAttribute('content', want);
+          }
+          for (var i = 1; i < metas.length; i++) {
+            if (metas[i].parentNode) metas[i].parentNode.removeChild(metas[i]);
+          }
+          if (!document.getElementById('sb-desktop-style')) {
+            var ds = document.createElement('style');
+            ds.id = 'sb-desktop-style';
+            ds.textContent = 'html{-webkit-text-size-adjust:100% !important;text-size-adjust:100% !important;}';
+            head.appendChild(ds);
+          }
+        } else {
+          if (vp && (vp.getAttribute('content') || '').indexOf('width=1280') !== -1) {
+            vp.setAttribute('content', 'width=device-width, initial-scale=1.0');
+          }
+          var old = document.getElementById('sb-desktop-style');
+          if (old && old.parentNode) old.parentNode.removeChild(old);
+        }
+      }
+
       function applyRules() {
         var host = (window.location.hostname || '').toLowerCase();
         var path = window.location.pathname || '';
 
-        // Desktop Viewport Enforcement
-        var vpMeta = document.querySelector('meta[name="viewport"]');
-        if (window.__SB_DESKTOP_MODE) {
-          if (!vpMeta) {
-            vpMeta = document.createElement('meta');
-            vpMeta.name = 'viewport';
-            document.head.appendChild(vpMeta);
-          }
-          if (vpMeta.getAttribute('content') !== 'width=1280, initial-scale=0.35, user-scalable=yes') {
-            vpMeta.setAttribute('content', 'width=1280, initial-scale=0.35, user-scalable=yes');
-          }
-        } else {
-          if (vpMeta && vpMeta.getAttribute('content') && vpMeta.getAttribute('content').includes('width=1280')) {
-            vpMeta.setAttribute('content', 'width=device-width, initial-scale=1.0');
-          }
-        }
+        // Desktop Viewport Enforcement (Chrome 'Desktop site' jaisa)
+        sbViewport();
 
         // Page Zoom Enforcement
         if (document.body && window.__SB_ZOOM_PERCENT) {
@@ -318,6 +374,17 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         window.__SB_INTERVAL_SET = true;
         setInterval(applyRules, 400);
       }
+      if (document.head && !window.__SB_VP_OBSERVER) {
+        window.__SB_VP_OBSERVER = true;
+        try {
+          var vpTimer = null;
+          var mo = new MutationObserver(function() {
+            if (vpTimer) return;
+            vpTimer = setTimeout(function() { vpTimer = null; sbViewport(); }, 30);
+          });
+          mo.observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ['content'] });
+        } catch (e) {}
+      }
       applyRules();
     })();
   ''';
@@ -325,13 +392,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   @override
   void initState() {
     super.initState();
-    _tabs = [
-      BrowserTab(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        title: 'New Tab',
-        url: 'https://www.google.com',
-      ),
-    ];
+    _urlFocus.addListener(() {
+      if (_urlFocus.hasFocus) {
+        _urlController.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _urlController.text.length,
+        );
+      }
+    });
     _setupWebViewController();
     _setupIntentListener();
     _bootBrowser();
@@ -343,6 +411,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     _lockEnforcementTimer?.cancel();
     _urlController.dispose();
     _findController.dispose();
+    _urlFocus.dispose();
     super.dispose();
   }
 
@@ -360,19 +429,29 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   void _setupIntentListener() {
-    // जब ऐप बैकग्राउंड में खुला हो और WhatsApp आदि से किसी लिंक पर क्लिक हो
+    // Native (Kotlin) se aane wale events: naya link / download request
     _intentChannel.setMethodCallHandler((call) async {
       if (call.method == 'onNewIntentUrl') {
         final String? incoming = call.arguments as String?;
         if (incoming != null && incoming.trim().isNotEmpty) {
-          _loadFromSearchBar(incoming.trim());
+          // Bahar ka link naye tab mein khulta hai (Chrome jaisa)
+          _createNewTab(url: incoming.trim());
+        }
+      } else if (call.method == 'onDownloadRequested') {
+        final args = call.arguments;
+        if (args is Map) {
+          _handleNativeDownloadRequest(args);
         }
       }
+      return null;
     });
   }
 
   Future<void> _bootBrowser() async {
     await _loadSavedData();
+    await _applyUserAgent(_activeTab);
+    await _configureNativeWebView(_activeTab);
+
     String? initialExternalUrl;
     try {
       initialExternalUrl =
@@ -514,99 +593,377 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   void _setupWebViewController() {
-    _webController = WebViewController()
+    final first = _newTab();
+    _tabs = [first];
+    _activeTabIndex = 0;
+    _webViewReady = true;
+  }
+
+  BrowserTab _newTab({
+    String url = 'https://www.google.com',
+    bool incognito = false,
+  }) {
+    final tab = BrowserTab(
+      id: '${DateTime.now().microsecondsSinceEpoch}_${_tabSeq++}',
+      title: incognito ? 'Private Tab' : 'New Tab',
+      url: url,
+      isIncognito: incognito,
+    );
+    tab.controller = _buildController(tab);
+    return tab;
+  }
+
+  bool _isActiveTab(BrowserTab tab) {
+    return _tabs.isNotEmpty &&
+        _activeTabIndex < _tabs.length &&
+        identical(_tabs[_activeTabIndex], tab);
+  }
+
+  WebViewController _buildController(BrowserTab tab) {
+    final controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(const Color(0xFF12151C))
-      ..setUserAgent(_mobileUserAgent)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onProgress: (progress) {
-            if (mounted) {
-              setState(() => _loadingProgress = progress);
-            }
-            _injectFocusScripts();
-          },
-          onPageStarted: (url) {
-            if (url == 'about:blank') return;
-            final allowed = _evaluateUrl(url, showOverlayOnBlock: true);
-            if (!allowed) {
-              _webController.loadRequest(Uri.parse('about:blank'));
-              return;
-            }
-            if (mounted) {
-              setState(() {
-                _currentUrl = url;
-                _urlController.text = url;
-                _syncActiveTab(url: url);
-              });
-            }
-            _injectFocusScripts();
-          },
-          onPageFinished: (url) async {
-            if (url == 'about:blank') return;
-            _injectFocusScripts();
+      ..setNavigationDelegate(_buildNavigationDelegate(tab));
+    _configurePlatformFeatures(controller);
+    return controller;
+  }
+
+  NavigationDelegate _buildNavigationDelegate(BrowserTab tab) {
+    return NavigationDelegate(
+      onProgress: (progress) {
+        tab.progress = progress;
+        if (_isActiveTab(tab) && mounted) {
+          setState(() => _loadingProgress = progress);
+        }
+        // Script har tick par nahi, page ke shuru mein ek baar chalti hai
+        if (!tab.bootstrapped && progress >= 15) {
+          tab.bootstrapped = true;
+          _injectFocusScripts(tab);
+        }
+      },
+      onPageStarted: (url) {
+        tab.bootstrapped = false;
+        if (url == 'about:blank') return;
+        final active = _isActiveTab(tab);
+        final allowed = _evaluateUrl(url, showOverlayOnBlock: active);
+        if (!allowed) {
+          tab.controller.loadRequest(Uri.parse('about:blank'));
+          return;
+        }
+        tab.url = url;
+        if (active && mounted) {
+          setState(() {
+            _currentUrl = url;
+            _setUrlText(url);
+          });
+        }
+        _injectFocusScripts(tab);
+      },
+      onPageFinished: (url) async {
+        if (url == 'about:blank') return;
+        tab.progress = 100;
+        tab.bootstrapped = true;
+        if (_isActiveTab(tab) && mounted) {
+          setState(() => _loadingProgress = 100);
+        }
+        _injectFocusScripts(tab);
+        String cleanTitle = '';
+        try {
+          final titleObj =
+              await tab.controller.runJavaScriptReturningResult('document.title');
+          cleanTitle = _decodeJsString(titleObj);
+        } catch (_) {}
+        if (!mounted) return;
+        tab.url = url;
+        if (cleanTitle.isNotEmpty) {
+          tab.title = cleanTitle;
+          if (_isActiveTab(tab)) {
+            setState(() => _pageTitle = cleanTitle);
+          }
+        }
+        _recordHistory(
+          cleanTitle.isEmpty ? url : cleanTitle,
+          url,
+          incognito: tab.isIncognito,
+        );
+      },
+      onUrlChange: (change) {
+        final newUrl = change.url ?? '';
+        if (newUrl.isEmpty || newUrl == 'about:blank') return;
+        final active = _isActiveTab(tab);
+        final allowed = _evaluateUrl(newUrl, showOverlayOnBlock: active);
+        if (!allowed) {
+          tab.controller.loadRequest(Uri.parse('about:blank'));
+          return;
+        }
+        tab.url = newUrl;
+        if (active && mounted) {
+          setState(() {
+            _currentUrl = newUrl;
+            _setUrlText(newUrl);
+          });
+        }
+        _injectFocusScripts(tab);
+      },
+      onNavigationRequest: (request) {
+        final reqUrl = request.url;
+        if (reqUrl == 'about:blank') return NavigationDecision.navigate;
+        final active = _isActiveTab(tab);
+
+        // Desktop mode mein mobile (m.) links ko desktop version par bhejo
+        if (request.isMainFrame && tab.isDesktop) {
+          final rewritten = _normalizeUrlForMode(reqUrl, desktop: true);
+          if (rewritten != reqUrl && Uri.tryParse(rewritten) != null) {
+            tab.controller.loadRequest(Uri.parse(rewritten));
+            return NavigationDecision.prevent;
+          }
+        }
+
+        final allowed = _evaluateUrl(
+          reqUrl,
+          showOverlayOnBlock: active,
+          fromNavRequest: true,
+        );
+        if (!allowed) return NavigationDecision.prevent;
+
+        if (request.isMainFrame) {
+          if (_hasExt(reqUrl, _viewerExts)) {
+            // PDF / Office files browser ke andar viewer mein khulti hain
+            _rememberDownload(reqUrl);
+            _openDocViewer(tab, reqUrl);
+            return NavigationDecision.prevent;
+          }
+          if (_hasExt(reqUrl, _downloadExts)) {
+            _rememberDownload(reqUrl);
+            _startDownload(reqUrl);
+            return NavigationDecision.prevent;
+          }
+          if (_hasExt(reqUrl, _mediaExts)) {
+            _rememberDownload(reqUrl);
+          }
+        }
+        return NavigationDecision.navigate;
+      },
+    );
+  }
+
+  /// Fullscreen video aur file upload (webview_flutter_android ke features).
+  /// Dynamic call hai, isliye library version badalne par bhi build nahi tutega.
+  void _configurePlatformFeatures(WebViewController controller) {
+    try {
+      final dynamic platform = (controller as dynamic).platform;
+      platform.setCustomWidgetCallbacks(
+        onShowCustomWidget: (dynamic widget, dynamic onHidden) {
+          _enterFullscreen(widget as Widget, () {
             try {
-              final titleObj = await _webController
-                  .runJavaScriptReturningResult('document.title');
-              final cleanTitle =
-                  titleObj.toString().replaceAll('"', '').trim();
-              if (mounted && cleanTitle.isNotEmpty) {
-                setState(() {
-                  _pageTitle = cleanTitle;
-                  _syncActiveTab(title: cleanTitle, url: url);
-                });
-              }
-              _recordHistory(cleanTitle.isEmpty ? url : cleanTitle, url);
-            } catch (_) {
-              _recordHistory(url, url);
-            }
-          },
-          onUrlChange: (change) {
-            final newUrl = change.url ?? '';
-            if (newUrl.isEmpty || newUrl == 'about:blank') return;
-            final allowed = _evaluateUrl(newUrl, showOverlayOnBlock: true);
-            if (!allowed) {
-              _webController.loadRequest(Uri.parse('about:blank'));
-              return;
-            }
-            if (mounted) {
-              setState(() {
-                _currentUrl = newUrl;
-                _urlController.text = newUrl;
-                _syncActiveTab(url: newUrl);
-              });
-            }
-            _injectFocusScripts();
-          },
-          onNavigationRequest: (request) {
-            final reqUrl = request.url;
-            if (reqUrl == 'about:blank') return NavigationDecision.navigate;
-
-            // डाउनलोड होने वाली फ़ाइलों को पहचानना
-            final lower = reqUrl.toLowerCase().split('?').first;
-            if (lower.endsWith('.pdf') ||
-                lower.endsWith('.zip') ||
-                lower.endsWith('.apk') ||
-                lower.endsWith('.doc') ||
-                lower.endsWith('.docx') ||
-                lower.endsWith('.mp3') ||
-                lower.endsWith('.mp4')) {
-              if (!_downloads.contains(reqUrl)) {
-                setState(() => _downloads.insert(0, reqUrl));
-                _saveData();
-                _showToast('📥 फ़ाइल लिंक Downloads में सेव किया गया');
-              }
-            }
-
-            final allowed = _evaluateUrl(reqUrl, showOverlayOnBlock: true);
-            if (!allowed) {
-              return NavigationDecision.prevent;
-            }
-            return NavigationDecision.navigate;
-          },
-        ),
+              onHidden();
+            } catch (_) {}
+          });
+        },
+        onHideCustomWidget: () {
+          _exitFullscreenFromWeb();
+        },
       );
-    _webViewReady = true;
+    } catch (_) {}
+    try {
+      final dynamic platform = (controller as dynamic).platform;
+      platform.setOnShowFileSelector((dynamic params) async {
+        return await _pickFilesForWeb(params);
+      });
+    } catch (_) {}
+  }
+
+  Future<List<String>> _pickFilesForWeb(dynamic params) async {
+    bool multiple = false;
+    List<String> types = <String>[];
+    try {
+      multiple = params.mode.toString().toLowerCase().contains('multiple');
+    } catch (_) {}
+    try {
+      types = List<String>.from(params.acceptTypes as List);
+    } catch (_) {}
+    try {
+      final res = await _intentChannel.invokeMethod<List<dynamic>>(
+        'pickFiles',
+        <String, dynamic>{'multiple': multiple, 'types': types},
+      );
+      return (res ?? <dynamic>[]).map((e) => e.toString()).toList();
+    } catch (_) {
+      return <String>[];
+    }
+  }
+
+  void _enterFullscreen(Widget widget, VoidCallback onHidden) {
+    if (!mounted) {
+      onHidden();
+      return;
+    }
+    _fullscreenActive = true;
+    _fullscreenHideCb = onHidden;
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+    Navigator.of(context)
+        .push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => Scaffold(
+          backgroundColor: Colors.black,
+          body: SizedBox.expand(child: widget),
+        ),
+      ),
+    )
+        .then((_) {
+      _restoreSystemUi();
+      if (_fullscreenActive) {
+        // User ne back dabaya: WebView ko batao ki fullscreen band hua
+        _fullscreenActive = false;
+        final cb = _fullscreenHideCb;
+        _fullscreenHideCb = null;
+        cb?.call();
+      }
+    });
+  }
+
+  void _exitFullscreenFromWeb() {
+    if (!_fullscreenActive) return;
+    _fullscreenActive = false;
+    _fullscreenHideCb = null;
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  void _restoreSystemUi() {
+    SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.manual,
+      overlays: SystemUiOverlay.values,
+    );
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+  }
+
+  /// Native WebView settings: desktop viewport + download listener.
+  Future<void> _configureNativeWebView(BrowserTab tab) async {
+    try {
+      final dynamic platform = (tab.controller as dynamic).platform;
+      final dynamic id = platform.webViewIdentifier;
+      await _intentChannel.invokeMethod<dynamic>(
+        'configureWebView',
+        <String, dynamic>{'id': id, 'desktop': tab.isDesktop},
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _applyUserAgent(BrowserTab tab) async {
+    try {
+      await tab.controller.setUserAgent(
+        tab.isDesktop ? _desktopUserAgent : _mobileUserAgent,
+      );
+    } catch (_) {}
+  }
+
+  String _decodeJsString(Object? raw) {
+    var s = (raw ?? '').toString();
+    if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+      try {
+        final decoded = jsonDecode(s);
+        if (decoded is String) return decoded.trim();
+      } catch (_) {}
+      s = s.substring(1, s.length - 1);
+    }
+    return s.trim();
+  }
+
+  void _setUrlText(String text) {
+    // User URL bar mein type kar raha ho to usse overwrite mat karo
+    if (_urlFocus.hasFocus) return;
+    _urlController.text = text;
+  }
+
+  bool _hasExt(String url, List<String> exts) {
+    final path = url.toLowerCase().split('#').first.split('?').first;
+    return exts.any((e) => path.endsWith(e));
+  }
+
+  void _rememberDownload(String url) {
+    if (!mounted) return;
+    if (_downloads.contains(url)) return;
+    setState(() {
+      _downloads.insert(0, url);
+      if (_downloads.length > 200) _downloads.removeLast();
+    });
+    _saveData();
+  }
+
+  void _openDocViewer(BrowserTab tab, String docUrl) {
+    final viewer =
+        'https://docs.google.com/gview?embedded=true&url=${Uri.encodeComponent(docUrl)}';
+    _showToast(
+      '📄 फ़ाइल viewer में खुल रही है',
+      actionLabel: 'डाउनलोड',
+      onAction: () => _startDownload(docUrl),
+    );
+    tab.controller.loadRequest(Uri.parse(viewer));
+  }
+
+  Future<void> _startDownload(
+    String url, {
+    String? userAgent,
+    String? contentDisposition,
+    String? mimeType,
+  }) async {
+    if (!(url.startsWith('http://') || url.startsWith('https://'))) {
+      _showToast('यह लिंक डाउनलोड नहीं किया जा सकता');
+      return;
+    }
+    try {
+      final name = await _intentChannel.invokeMethod<String>(
+        'downloadFile',
+        <String, dynamic>{
+          'url': url,
+          'userAgent': userAgent ??
+              (_isDesktopMode ? _desktopUserAgent : _mobileUserAgent),
+          'contentDisposition': contentDisposition,
+          'mimeType': mimeType,
+        },
+      );
+      _showToast('📥 डाउनलोड शुरू: ${name ?? ''}');
+    } catch (_) {
+      _showToast('डाउनलोड शुरू नहीं हो सका');
+    }
+  }
+
+  void _handleNativeDownloadRequest(Map args) {
+    final url = (args['url'] ?? '').toString();
+    if (!(url.startsWith('http://') || url.startsWith('https://'))) return;
+    final mime = (args['mimeType'] ?? '').toString().toLowerCase();
+    final ua = (args['userAgent'] ?? '').toString();
+    final disposition = (args['contentDisposition'] ?? '').toString();
+    if (!_evaluateUrl(url, showOverlayOnBlock: false, fromNavRequest: true)) {
+      return;
+    }
+    _rememberDownload(url);
+    final isDoc = mime == 'application/pdf' ||
+        mime.contains('msword') ||
+        mime.contains('officedocument') ||
+        mime.contains('ms-excel') ||
+        mime.contains('ms-powerpoint');
+    if (isDoc) {
+      _openDocViewer(_activeTab, url);
+    } else {
+      _startDownload(
+        url,
+        userAgent: ua.isEmpty ? null : ua,
+        contentDisposition: disposition.isEmpty ? null : disposition,
+        mimeType: mime.isEmpty ? null : mime,
+      );
+    }
   }
 
   void _syncActiveTab({String? title, String? url}) {
@@ -614,13 +971,11 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     final tab = _tabs[_activeTabIndex];
     if (title != null && title.isNotEmpty) tab.title = title;
     if (url != null && url.isNotEmpty) tab.url = url;
-    tab.isDesktop = _isDesktopMode;
-    tab.isIncognito = _isIncognito;
   }
 
-  void _recordHistory(String title, String url) {
-    // Incognito मोड में हिस्ट्री सेव नहीं होगी, लेकिन सारे Locks काम करेंगे
-    if (_isIncognito) return;
+  void _recordHistory(String title, String url, {bool incognito = false}) {
+    // Private tab mein history save nahi hoti, lekin saare Locks kaam karte hain
+    if (incognito) return;
     if (url.isEmpty || url == 'about:blank') return;
     if (_history.isNotEmpty && _history.first.url == url) return;
 
@@ -640,8 +995,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     _saveData();
   }
 
-  Future<void> _injectFocusScripts() async {
-    if (!_webViewReady) return;
+  Future<void> _injectFocusScripts([BrowserTab? target]) async {
+    if (!_webViewReady || _tabs.isEmpty) return;
+    final tab = target ?? _activeTab;
     try {
       final bool shortsActive =
           _blockYtShorts && (_featurePassHash.isEmpty || _isFeatureLockActive);
@@ -654,40 +1010,79 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         window.__SB_YT_SHORTS = $shortsActive;
         window.__SB_YT_FEED = $feedActive;
         window.__SB_IG_REELS = $igActive;
-        window.__SB_DESKTOP_MODE = $_isDesktopMode;
+        window.__SB_DESKTOP_MODE = ${tab.isDesktop};
         window.__SB_ZOOM_PERCENT = $_zoomPercent;
       ''';
-      await _webController.runJavaScript(flagsJs);
-      await _webController.runJavaScript(_focusFilterJs);
+      await tab.controller.runJavaScript(flagsJs);
+      await tab.controller.runJavaScript(_focusFilterJs);
     } catch (_) {}
   }
 
-  bool _domainMatches(String host, String fullUrl, String ruleDomain) {
-    final cleanRule = ruleDomain
-        .toLowerCase()
-        .replaceAll('https://', '')
-        .replaceAll('http://', '')
-        .replaceAll('www.', '')
-        .replaceAll('m.', '')
-        .split('/')
-        .first
-        .trim();
-    if (cleanRule.isEmpty) return false;
+  // ---------------------------------------------------------------------
+  // Domain matching (strict = whitelist ke liye, loose = block groups ke liye)
+  // ---------------------------------------------------------------------
+  String _cleanRuleDomain(String raw) {
+    var s = raw.toLowerCase().trim();
+    s = s.replaceFirst(RegExp(r'^[a-z][a-z0-9+.-]*://'), '');
+    s = s.split('/').first.split('?').first.split('#').first;
+    if (s.startsWith('www.')) s = s.substring(4);
+    if (s.startsWith('m.')) s = s.substring(2);
+    return s.trim();
+  }
 
-    final cleanHost =
-        host.toLowerCase().replaceAll('www.', '').replaceAll('m.', '');
-    if (cleanHost == cleanRule || cleanHost.endsWith('.$cleanRule')) {
-      return true;
-    }
-    final cleanRuleHyphen = cleanRule.replaceAll('.', '-');
-    if (fullUrl.toLowerCase().contains(cleanRule) ||
-        cleanHost.contains(cleanRuleHyphen)) {
-      return true;
+  String _stripHostPrefix(String host) {
+    var h = host.toLowerCase();
+    if (h.startsWith('www.')) h = h.substring(4);
+    if (h.startsWith('m.')) h = h.substring(2);
+    return h;
+  }
+
+  bool _hostIs(String host, String domain) {
+    final h = host.toLowerCase();
+    return h == domain || h.endsWith('.$domain');
+  }
+
+  /// Sirf host match: example.com ya *.example.com (Google Translate proxy bhi).
+  bool _hostMatchesStrict(String host, String ruleDomain) {
+    final rule = _cleanRuleDomain(ruleDomain);
+    if (rule.isEmpty) return false;
+    final h = _stripHostPrefix(host);
+    if (h == rule || h.endsWith('.$rule')) return true;
+
+    // translate.goog proxy: en-wikipedia-org.translate.goog
+    const proxySuffix = '.translate.goog';
+    if (h.endsWith(proxySuffix)) {
+      final label = h.substring(0, h.length - proxySuffix.length);
+      final hyphen = rule.replaceAll('.', '-');
+      if (label == hyphen) return true;
+      if (label.endsWith('-$hyphen') && !label.endsWith('--$hyphen')) {
+        return true;
+      }
     }
     return false;
   }
 
-  bool _evaluateUrl(String url, {bool showOverlayOnBlock = true}) {
+  /// Block groups ke liye: host match ya poore URL mein (boundary ke saath) domain.
+  /// Isse netflix.com par "x.com" rule galat se nahi lagta.
+  bool _hostMatchesLoose(String host, String fullUrl, String ruleDomain) {
+    final rule = _cleanRuleDomain(ruleDomain);
+    if (rule.isEmpty) return false;
+    if (_hostMatchesStrict(host, rule)) return true;
+
+    var decoded = fullUrl.toLowerCase();
+    try {
+      decoded = Uri.decodeFull(decoded);
+    } catch (_) {}
+    final escaped = RegExp.escape(rule);
+    return RegExp('(^|[^a-z0-9-])$escaped(?![a-z0-9-])').hasMatch(decoded);
+  }
+
+  bool _evaluateUrl(
+    String url, {
+    bool showOverlayOnBlock = true,
+    bool fromNavRequest = false,
+    int depth = 0,
+  }) {
     if (url == 'about:blank') return true;
     final uri = Uri.tryParse(url);
     if (uri == null) return true;
@@ -698,20 +1093,54 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     final path = uri.path.toLowerCase();
     final featureEnforced = _featurePassHash.isEmpty || _isFeatureLockActive;
 
+    // Google Docs viewer: rules andar wale asli document URL par lagte hain
+    if (depth < 2 &&
+        host == 'docs.google.com' &&
+        (path == '/gview' || path == '/viewer' || path == '/viewerng/viewer')) {
+      String? inner;
+      try {
+        inner = uri.queryParameters['url'];
+      } catch (_) {
+        inner = null;
+      }
+      if (inner != null && inner.isNotEmpty) {
+        return _evaluateUrl(
+          inner,
+          showOverlayOnBlock: showOverlayOnBlock,
+          fromNavRequest: fromNavRequest,
+          depth: depth + 1,
+        );
+      }
+    }
+
     // 1. Feature Locks (YouTube Shorts & Instagram Reels)
     if (featureEnforced) {
+      String? featureReason;
       if (_blockYtShorts &&
-          host.contains('youtube.com') &&
+          _hostIs(host, 'youtube.com') &&
           path.startsWith('/shorts')) {
-        _showToast('YouTube Shorts लॉक है — केवल स्टडी वीडियो अनुमत हैं');
-        return false;
-      }
-      if (_blockIgReels &&
-          host.contains('instagram.com') &&
+        featureReason = 'YouTube Shorts लॉक है — केवल स्टडी वीडियो अनुमत हैं';
+      } else if (_blockIgReels &&
+          _hostIs(host, 'instagram.com') &&
           (path.startsWith('/reels') ||
               path.startsWith('/reel/') ||
               path.startsWith('/explore'))) {
-        _showToast('Instagram Reels और Explore लॉक है');
+        featureReason = 'Instagram Reels और Explore लॉक है';
+      }
+      if (featureReason != null) {
+        final String reason = featureReason;
+        if (fromNavRequest) {
+          // Link tap: page wahi rehta hai, sirf message
+          _showToast(reason);
+        } else if (showOverlayOnBlock && mounted) {
+          // Seedha load / URL change: overlay dikhao (toast ka loop nahi)
+          setState(() {
+            _isPageBlocked = true;
+            _blockedUrl = url;
+            _blockedReason = reason;
+            _blockingGroup = null;
+          });
+        }
         return false;
       }
     }
@@ -720,7 +1149,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     for (final group in _lockGroups) {
       if (group.isCurrentlyActive) {
         for (final domain in group.domains) {
-          if (_domainMatches(host, url, domain)) {
+          if (_hostMatchesLoose(host, url, domain)) {
             if (showOverlayOnBlock && mounted) {
               setState(() {
                 _isPageBlocked = true;
@@ -735,11 +1164,11 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       }
     }
 
-    // 3. Exam Whitelist Mode Check
+    // 3. Exam Whitelist Mode Check (sirf asli host match, URL ke andar ka text nahi)
     if (_whitelistMode && featureEnforced) {
       bool allowed = false;
       for (final wDomain in _whitelistedDomains) {
-        if (_domainMatches(host, url, wDomain)) {
+        if (_hostMatchesStrict(host, wDomain)) {
           allowed = true;
           break;
         }
@@ -763,9 +1192,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     return true;
   }
 
-  String _normalizeUrlForMode(String rawUrl) {
+  String _normalizeUrlForMode(String rawUrl, {bool? desktop}) {
+    final bool isDesktop = desktop ?? _isDesktopMode;
     var target = rawUrl;
-    if (_isDesktopMode) {
+    if (isDesktop) {
       if (target.contains('://m.youtube.com')) {
         target = target.replaceFirst('://m.youtube.com', '://www.youtube.com');
         if (!target.contains('app=desktop')) {
@@ -784,9 +1214,11 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     return target;
   }
 
-  void _loadFromSearchBar(String input) {
+  void _loadFromSearchBar(String input, {BrowserTab? inTab}) {
     final trimmed = input.trim();
     if (trimmed.isEmpty) return;
+    final tab = inTab ?? _activeTab;
+    final bool active = _isActiveTab(tab);
 
     String targetUrl;
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
@@ -798,39 +1230,67 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           'https://www.google.com/search?q=${Uri.encodeComponent(trimmed)}';
     }
 
-    targetUrl = _normalizeUrlForMode(targetUrl);
+    // Kharab URL par crash nahi: seedha Google search
+    final parsed = Uri.tryParse(targetUrl);
+    if (parsed == null || parsed.host.isEmpty) {
+      targetUrl =
+          'https://www.google.com/search?q=${Uri.encodeComponent(trimmed)}';
+    }
 
-    setState(() {
-      _currentUrl = targetUrl;
-      _urlController.text = targetUrl;
-      _isReadingMode = false;
-      _syncActiveTab(url: targetUrl);
-    });
+    targetUrl = _normalizeUrlForMode(targetUrl, desktop: tab.isDesktop);
+
+    tab.url = targetUrl;
+    if (active) {
+      setState(() {
+        _currentUrl = targetUrl;
+        _urlController.text = targetUrl;
+        _isReadingMode = false;
+      });
+    }
 
     // लिंक लोड करने से पहले Lock चेक करना (बाहरी और अंदरूनी दोनों लिंक्स के लिए)
-    final allowed = _evaluateUrl(targetUrl, showOverlayOnBlock: true);
+    final allowed = _evaluateUrl(targetUrl, showOverlayOnBlock: active);
     if (!allowed) {
-      _webController.loadRequest(Uri.parse('about:blank'));
+      tab.controller.loadRequest(Uri.parse('about:blank'));
       return;
     }
 
-    setState(() => _isPageBlocked = false);
-    _webController.loadRequest(Uri.parse(targetUrl));
+    if (active) {
+      setState(() => _isPageBlocked = false);
+    }
+
+    // PDF / Office files: viewer mein; zip/apk: seedha download
+    if (_hasExt(targetUrl, _viewerExts)) {
+      _rememberDownload(targetUrl);
+      _openDocViewer(tab, targetUrl);
+      return;
+    }
+    if (_hasExt(targetUrl, _downloadExts)) {
+      _rememberDownload(targetUrl);
+      _startDownload(targetUrl);
+      return;
+    }
+
+    tab.controller.loadRequest(Uri.parse(targetUrl));
   }
 
   Future<void> _toggleDesktopMode() async {
-    setState(() {
-      _isDesktopMode = !_isDesktopMode;
-      _syncActiveTab();
-    });
-    await _webController.setUserAgent(
-      _isDesktopMode ? _desktopUserAgent : _mobileUserAgent,
-    );
-    final updatedUrl = _normalizeUrlForMode(_currentUrl);
-    _showToast(_isDesktopMode
+    final tab = _activeTab;
+    setState(() => tab.isDesktop = !tab.isDesktop);
+    await _applyUserAgent(tab);
+    await _configureNativeWebView(tab);
+    try {
+      // Purana mobile page cache se na aaye
+      await tab.controller.clearCache();
+    } catch (_) {}
+    _showToast(tab.isDesktop
         ? 'Desktop site मोड चालू किया गया'
         : 'Mobile site मोड चालू किया गया');
-    _loadFromSearchBar(updatedUrl);
+    var reloadUrl = _currentUrl;
+    if (reloadUrl.isEmpty || reloadUrl.startsWith('about:')) {
+      reloadUrl = 'https://www.google.com';
+    }
+    _loadFromSearchBar(_normalizeUrlForMode(reloadUrl, desktop: tab.isDesktop));
   }
 
   Future<void> _toggleReadingMode() async {
@@ -841,15 +1301,31 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           if (document.getElementById('sb-reader-overlay')) return;
           var title = document.title || '';
           var paragraphs = Array.from(document.querySelectorAll('article p, main p, p'))
-            .map(function(p) { return p.innerText.trim(); })
+            .map(function(p) { return (p.innerText || '').trim(); })
             .filter(function(t) { return t.length > 40; });
-          var contentHtml = paragraphs.length > 0
-            ? paragraphs.map(function(p) { return '<p style="margin-bottom:16px;line-height:1.75;font-size:18px;color:#E2E8F0;">' + p + '</p>'; }).join('')
-            : '<p style="color:#94A3B8;">इस पेज पर रीडिंग मोड के लिए लंबा टेक्स्ट उपलब्ध नहीं है।</p>';
           var overlay = document.createElement('div');
           overlay.id = 'sb-reader-overlay';
           overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#0F141C;color:#F8FAFC;overflow-y:auto;padding:24px 20px 80px 20px;font-family:sans-serif;';
-          overlay.innerHTML = '<div style="max-width:680px;margin:0 auto;"><h1 style="font-size:24px;line-height:1.4;margin-bottom:20px;color:#A8C7FA;border-bottom:1px solid #262F40;padding-bottom:12px;">' + title + '</h1>' + contentHtml + '</div>';
+          var wrap = document.createElement('div');
+          wrap.style.cssText = 'max-width:680px;margin:0 auto;';
+          var h1 = document.createElement('h1');
+          h1.style.cssText = 'font-size:24px;line-height:1.4;margin-bottom:20px;color:#A8C7FA;border-bottom:1px solid #262F40;padding-bottom:12px;';
+          h1.textContent = title;
+          wrap.appendChild(h1);
+          if (paragraphs.length > 0) {
+            paragraphs.forEach(function(t) {
+              var p = document.createElement('p');
+              p.style.cssText = 'margin-bottom:16px;line-height:1.75;font-size:18px;color:#E2E8F0;';
+              p.textContent = t;
+              wrap.appendChild(p);
+            });
+          } else {
+            var msg = document.createElement('p');
+            msg.style.cssText = 'color:#94A3B8;';
+            msg.textContent = 'इस पेज पर रीडिंग मोड के लिए लंबा टेक्स्ट उपलब्ध नहीं है।';
+            wrap.appendChild(msg);
+          }
+          overlay.appendChild(wrap);
           document.body.appendChild(overlay);
         })();
       ''');
@@ -873,28 +1349,41 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
 
   Future<void> _performFindInPage(String query) async {
     if (query.trim().isEmpty) return;
-    final safeQuery = query.replaceAll("'", "\\'");
-    await _webController.runJavaScript("window.find('$safeQuery');");
+    await _webController.runJavaScript('window.find(${jsonEncode(query)});');
   }
 
   void _createNewTab({bool incognito = false, String? url}) {
+    if (_tabs.length >= _maxTabs) {
+      if (url != null) {
+        _loadFromSearchBar(url);
+      } else {
+        _showToast('अधिकतम $_maxTabs टैब खुले रह सकते हैं — पहले कोई टैब बंद करें');
+      }
+      return;
+    }
     final target = url ?? 'https://www.google.com';
-    final newTab = BrowserTab(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      title: incognito ? 'Incognito Tab' : 'New Tab',
-      url: target,
-      isIncognito: incognito,
-      isDesktop: _isDesktopMode,
-    );
+    final newTab = _newTab(incognito: incognito);
     setState(() {
       _tabs.add(newTab);
       _activeTabIndex = _tabs.length - 1;
-      _isIncognito = incognito;
+      _isPageBlocked = false;
+      _isReadingMode = false;
+      _currentUrl = target;
+      _pageTitle = newTab.title;
+      _loadingProgress = 0;
+      _urlController.text = target;
     });
-    _loadFromSearchBar(target);
+    _prepareAndLoadNewTab(newTab, target);
     _showToast(incognito
-        ? 'New Incognito tab (सभी Focus Locks सक्रिय हैं)'
+        ? 'New Private tab: history सेव नहीं होगी (Focus Locks सक्रिय हैं)'
         : 'New tab खोला गया');
+  }
+
+  Future<void> _prepareAndLoadNewTab(BrowserTab tab, String target) async {
+    await _applyUserAgent(tab);
+    await _configureNativeWebView(tab);
+    if (!mounted || !_tabs.contains(tab)) return;
+    _loadFromSearchBar(target, inTab: tab);
   }
 
   void _switchToTab(int index) {
@@ -902,27 +1391,46 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     final tab = _tabs[index];
     setState(() {
       _activeTabIndex = index;
-      _isIncognito = tab.isIncognito;
-      _isDesktopMode = tab.isDesktop;
+      _currentUrl = tab.url;
+      _pageTitle = tab.title;
+      _loadingProgress = tab.progress;
+      _isPageBlocked = false;
+      _isReadingMode = false;
+      _urlController.text = tab.url;
     });
-    _webController.setUserAgent(
-      _isDesktopMode ? _desktopUserAgent : _mobileUserAgent,
-    );
-    _loadFromSearchBar(tab.url);
+    // Page reload nahi hota. Sirf Lock rules dobara check hote hain.
+    if (tab.url.isNotEmpty && tab.url != 'about:blank') {
+      final allowed = _evaluateUrl(tab.url, showOverlayOnBlock: true);
+      if (!allowed) {
+        tab.controller.loadRequest(Uri.parse('about:blank'));
+      }
+    }
+    _injectFocusScripts(tab);
   }
 
   void _closeTab(int index) {
+    if (index < 0 || index >= _tabs.length) return;
     if (_tabs.length <= 1) {
       _loadFromSearchBar('https://www.google.com');
       return;
     }
+    final closing = _tabs[index];
+    final wasActive = index == _activeTabIndex;
+    try {
+      // Band hone wale tab ki video/audio ruk jaye
+      closing.controller.loadRequest(Uri.parse('about:blank'));
+    } catch (_) {}
     setState(() {
       _tabs.removeAt(index);
-      if (_activeTabIndex >= _tabs.length) {
+      if (index < _activeTabIndex) {
+        _activeTabIndex--;
+      } else if (_activeTabIndex >= _tabs.length) {
         _activeTabIndex = _tabs.length - 1;
       }
     });
-    _switchToTab(_activeTabIndex);
+    if (wasActive) {
+      _switchToTab(_activeTabIndex);
+    }
   }
 
   bool get _isCurrentPageBookmarked =>
@@ -945,7 +1453,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     await _saveData();
   }
 
-  void _showToast(String msg) {
+  void _showToast(String msg, {String? actionLabel, VoidCallback? onAction}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -957,7 +1465,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         backgroundColor: const Color(0xFF1E232E),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        duration: const Duration(seconds: 2),
+        duration: Duration(seconds: actionLabel != null ? 4 : 2),
+        action: (actionLabel != null && onAction != null)
+            ? SnackBarAction(
+                label: actionLabel,
+                textColor: const Color(0xFFA8C7FA),
+                onPressed: onAction,
+              )
+            : null,
       ),
     );
   }
@@ -1080,7 +1595,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                             ),
                             _buildChromeMenuItem(
                               icon: Icons.visibility_off_outlined,
-                              title: 'New Incognito tab',
+                              title: 'New Private tab',
                               onTap: () {
                                 Navigator.pop(ctx);
                                 _createNewTab(incognito: true);
@@ -1329,7 +1844,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                       TextButton.icon(
                         icon: const Icon(Icons.visibility_off_outlined,
                             size: 17),
-                        label: const Text('Incognito'),
+                        label: const Text('Private'),
                         onPressed: () {
                           Navigator.pop(ctx);
                           _createNewTab(incognito: true);
@@ -1561,12 +2076,22 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                           style: const TextStyle(
                               fontSize: 12, color: Colors.white54),
                         ),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.copy, size: 18),
-                          onPressed: () {
-                            Clipboard.setData(ClipboardData(text: link));
-                            _showToast('लिंक कॉपी किया गया');
-                          },
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.download_rounded, size: 20),
+                              tooltip: 'Download',
+                              onPressed: () => _startDownload(link),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.copy, size: 18),
+                              onPressed: () {
+                                Clipboard.setData(ClipboardData(text: link));
+                                _showToast('लिंक कॉपी किया गया');
+                              },
+                            ),
+                          ],
                         ),
                         onTap: () {
                           Navigator.pop(ctx);
@@ -1665,7 +2190,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                   label: Text('${_lockGroups.first.name} ग्रुप में यह साइट डालें'),
                   onPressed: () async {
                     final group = _lockGroups.first;
-                    final clean = host.replaceAll('www.', '');
+                    final clean = _stripHostPrefix(host);
                     if (!group.domains.contains(clean)) {
                       setState(() => group.domains.add(clean));
                       await _saveData();
@@ -1695,6 +2220,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     required String title,
     required String expectedHash,
     bool allowTempUnlock = true,
+    String confirmLabel = 'Permanent Unlock',
   }) async {
     final passCtrl = TextEditingController();
     String? errorText;
@@ -1757,7 +2283,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                   setDialogState(() => errorText = 'गलत पासवर्ड!');
                 }
               },
-              child: const Text('Permanent Unlock'),
+              child: Text(confirmLabel),
             ),
           ],
         ),
@@ -2420,6 +2946,17 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   Future<void> _promptAddWhitelistDomain(StateSetter setSheetState) async {
+    // Whitelist lock chalu ho to naya site jodne ke liye bhi password chahiye
+    if (_whitelistMode && _isFeatureLockActive) {
+      final res = await _promptPasswordVerification(
+        title: 'Whitelist में साइट जोड़ने के लिए पासवर्ड',
+        expectedHash: _featurePassHash,
+        allowTempUnlock: false,
+        confirmLabel: 'Verify',
+      );
+      if (res != 'FULL') return;
+      if (!mounted) return;
+    }
     final ctrl = TextEditingController();
     await showDialog(
       context: context,
@@ -2440,14 +2977,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           ),
           FilledButton(
             onPressed: () async {
-              final d = ctrl.text
-                  .trim()
-                  .toLowerCase()
-                  .replaceAll('https://', '')
-                  .replaceAll('http://', '')
-                  .replaceAll('www.', '')
-                  .split('/')
-                  .first;
+              final d = _cleanRuleDomain(ctrl.text);
               if (d.isNotEmpty && !_whitelistedDomains.contains(d)) {
                 setState(() => _whitelistedDomains.add(d));
                 setSheetState(() {});
@@ -2530,14 +3060,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           ),
           FilledButton(
             onPressed: () async {
-              final raw = domainCtrl.text
-                  .trim()
-                  .toLowerCase()
-                  .replaceAll('https://', '')
-                  .replaceAll('http://', '')
-                  .replaceAll('www.', '')
-                  .split('/')
-                  .first;
+              final raw = _cleanRuleDomain(domainCtrl.text);
               if (raw.isNotEmpty && !group.domains.contains(raw)) {
                 setState(() => group.domains.add(raw));
                 setSheetState(() {});
@@ -2630,31 +3153,44 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   // ===========================================================================
   // MAIN SCAFFOLD & CHROME-STYLE TOP BAR
   // ===========================================================================
+  Future<void> _handleBackPressed() async {
+    if (_showFindBar || _showZoomBar) {
+      setState(() {
+        _showFindBar = false;
+        _showZoomBar = false;
+      });
+      return;
+    }
+    if (_isReadingMode) {
+      await _toggleReadingMode();
+      return;
+    }
+    if (_isPageBlocked) {
+      setState(() => _isPageBlocked = false);
+      _loadFromSearchBar('https://www.google.com');
+      return;
+    }
+    try {
+      if (await _webController.canGoBack()) {
+        await _webController.goBack();
+        return;
+      }
+    } catch (_) {}
+    if (_tabs.length > 1) {
+      // History khatam: Chrome ki tarah current tab band karo
+      _closeTab(_activeTabIndex);
+      return;
+    }
+    SystemNavigator.pop();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: () async {
-        if (_showFindBar || _showZoomBar) {
-          setState(() {
-            _showFindBar = false;
-            _showZoomBar = false;
-          });
-          return false;
-        }
-        if (_isReadingMode) {
-          await _toggleReadingMode();
-          return false;
-        }
-        if (_isPageBlocked) {
-          setState(() => _isPageBlocked = false);
-          _loadFromSearchBar('https://www.google.com');
-          return false;
-        }
-        if (await _webController.canGoBack()) {
-          await _webController.goBack();
-          return false;
-        }
-        return true;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _handleBackPressed();
       },
       child: Scaffold(
         body: SafeArea(
@@ -2690,6 +3226,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         ),
                         child: TextField(
                           controller: _urlController,
+                          focusNode: _urlFocus,
                           textInputAction: TextInputAction.go,
                           onSubmitted: _loadFromSearchBar,
                           style: const TextStyle(fontSize: 13.5),
@@ -2857,7 +3394,17 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
               Expanded(
                 child: Stack(
                   children: [
-                    WebViewWidget(controller: _webController),
+                    IndexedStack(
+                      index: _activeTabIndex,
+                      sizing: StackFit.expand,
+                      children: [
+                        for (final tab in _tabs)
+                          WebViewWidget(
+                            key: ValueKey(tab.id),
+                            controller: tab.controller,
+                          ),
+                      ],
+                    ),
                     if (_isPageBlocked) _buildBlockedOverlay(),
                   ],
                 ),

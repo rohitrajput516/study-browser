@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout Repository
@@ -145,13 +147,28 @@ jobs:
           cat << 'EOF' > android/app/src/main/kotlin/com/vajra/studybrowser/MainActivity.kt
           package com.vajra.studybrowser
 
+          import android.app.Activity
+          import android.app.DownloadManager
+          import android.content.Context
           import android.content.Intent
+          import android.net.Uri
+          import android.os.Environment
+          import android.webkit.CookieManager
+          import android.webkit.MimeTypeMap
+          import android.webkit.URLUtil
+          import android.webkit.WebSettings
+          import android.webkit.WebView
           import io.flutter.embedding.android.FlutterActivity
           import io.flutter.embedding.engine.FlutterEngine
           import io.flutter.plugin.common.MethodChannel
 
           class MainActivity: FlutterActivity() {
               private var intentChannel: MethodChannel? = null
+              private var engineRef: FlutterEngine? = null
+              private var pendingPickResult: MethodChannel.Result? = null
+              private val pickRequestCode = 7311
+              private val originalWideViewPort = HashMap<Long, Boolean>()
+              private val originalLayoutAlgorithm = HashMap<Long, WebSettings.LayoutAlgorithm>()
 
               private fun extractUrlFromIntent(targetIntent: Intent?): String? {
                   if (targetIntent == null) return null
@@ -162,8 +179,133 @@ jobs:
                   return null
               }
 
+              // webview_flutter ka official native API (reflection se, taaki library badalne par build na tute)
+              private fun findWebView(id: Long): WebView? {
+                  val engine = engineRef ?: return null
+                  return try {
+                      val cls = Class.forName("io.flutter.plugins.webviewflutter.WebViewFlutterAndroidExternalApi")
+                      val method = cls.methods.firstOrNull { it.name == "getWebView" && it.parameterTypes.size == 2 }
+                      if (method == null) {
+                          null
+                      } else {
+                          val instance = try { cls.getField("INSTANCE").get(null) } catch (e: Throwable) { null }
+                          method.invoke(instance, engine, id) as? WebView
+                      }
+                  } catch (e: Throwable) {
+                      null
+                  }
+              }
+
+              // Desktop mode: wide viewport (Chrome jaisa) + download listener
+              private fun configureWebView(id: Long, desktop: Boolean): Boolean {
+                  val webView = findWebView(id) ?: return false
+                  val s = webView.settings
+                  if (!originalWideViewPort.containsKey(id)) {
+                      originalWideViewPort[id] = s.useWideViewPort
+                      originalLayoutAlgorithm[id] = s.layoutAlgorithm
+                  }
+                  if (desktop) {
+                      s.useWideViewPort = true
+                      s.loadWithOverviewMode = true
+                      s.layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
+                  } else {
+                      originalWideViewPort[id]?.let { s.useWideViewPort = it }
+                      originalLayoutAlgorithm[id]?.let { s.layoutAlgorithm = it }
+                  }
+                  webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
+                      val args = HashMap<String, Any?>()
+                      args["webViewId"] = id
+                      args["url"] = url
+                      args["userAgent"] = userAgent
+                      args["contentDisposition"] = contentDisposition
+                      args["mimeType"] = mimetype
+                      runOnUiThread { intentChannel?.invokeMethod("onDownloadRequested", args) }
+                  }
+                  return true
+              }
+
+              private fun enqueueDownload(url: String, userAgent: String?, contentDisposition: String?, mimeType: String?): String {
+                  val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+                  val request = DownloadManager.Request(Uri.parse(url))
+                  request.setTitle(fileName)
+                  request.setDescription("Study Browser")
+                  if (!mimeType.isNullOrBlank()) request.setMimeType(mimeType)
+                  request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                  val cookie = CookieManager.getInstance().getCookie(url)
+                  if (!cookie.isNullOrBlank()) request.addRequestHeader("Cookie", cookie)
+                  if (!userAgent.isNullOrBlank()) request.addRequestHeader("User-Agent", userAgent)
+                  val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                  try {
+                      request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+                      dm.enqueue(request)
+                  } catch (e: Exception) {
+                      request.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, fileName)
+                      dm.enqueue(request)
+                  }
+                  return fileName
+              }
+
+              private fun startFilePicker(multiple: Boolean, types: List<String>, result: MethodChannel.Result) {
+                  if (pendingPickResult != null) {
+                      result.success(ArrayList<String>())
+                      return
+                  }
+                  val mimeTypes = ArrayList<String>()
+                  for (t in types) {
+                      val trimmed = t.trim()
+                      if (trimmed.isEmpty()) continue
+                      if (trimmed.startsWith(".")) {
+                          val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(trimmed.substring(1).lowercase())
+                          if (mime != null) mimeTypes.add(mime)
+                      } else if (trimmed.contains("/")) {
+                          mimeTypes.add(trimmed)
+                      }
+                  }
+                  val pick = Intent(Intent.ACTION_GET_CONTENT)
+                  pick.addCategory(Intent.CATEGORY_OPENABLE)
+                  if (mimeTypes.size == 1) {
+                      pick.type = mimeTypes[0]
+                  } else {
+                      pick.type = "*/*"
+                      if (mimeTypes.size > 1) pick.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes.toTypedArray())
+                  }
+                  pick.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple)
+                  pendingPickResult = result
+                  try {
+                      startActivityForResult(Intent.createChooser(pick, "Select file"), pickRequestCode)
+                  } catch (e: Exception) {
+                      pendingPickResult = null
+                      result.success(ArrayList<String>())
+                  }
+              }
+
+              @Suppress("DEPRECATION")
+              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+                  if (requestCode == pickRequestCode) {
+                      val cb = pendingPickResult
+                      pendingPickResult = null
+                      val uris = ArrayList<String>()
+                      if (resultCode == Activity.RESULT_OK && data != null) {
+                          val clip = data.clipData
+                          if (clip != null) {
+                              for (i in 0 until clip.itemCount) {
+                                  val u = clip.getItemAt(i).uri
+                                  if (u != null) uris.add(u.toString())
+                              }
+                          } else {
+                              val single = data.data
+                              if (single != null) uris.add(single.toString())
+                          }
+                      }
+                      cb?.success(uris)
+                      return
+                  }
+                  super.onActivityResult(requestCode, resultCode, data)
+              }
+
               override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
                   super.configureFlutterEngine(flutterEngine)
+                  engineRef = flutterEngine
                   val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "study_browser/intent")
                   intentChannel = channel
                   channel.setMethodCallHandler { call, result ->
@@ -174,6 +316,38 @@ jobs:
                               intent?.removeExtra("query")
                               intent?.removeExtra(Intent.EXTRA_TEXT)
                               result.success(initialUrl)
+                          }
+                          "pickFiles" -> {
+                              val multiple = call.argument<Boolean>("multiple") ?: false
+                              val types = call.argument<List<String>>("types") ?: emptyList()
+                              startFilePicker(multiple, types, result)
+                          }
+                          "downloadFile" -> {
+                              val url = call.argument<String>("url")
+                              if (url.isNullOrBlank()) {
+                                  result.error("bad_args", "url missing", null)
+                              } else {
+                                  try {
+                                      val name = enqueueDownload(
+                                          url,
+                                          call.argument<String>("userAgent"),
+                                          call.argument<String>("contentDisposition"),
+                                          call.argument<String>("mimeType")
+                                      )
+                                      result.success(name)
+                                  } catch (e: Exception) {
+                                      result.error("download_failed", e.message, null)
+                                  }
+                              }
+                          }
+                          "configureWebView" -> {
+                              val id = call.argument<Number>("id")?.toLong()
+                              val desktop = call.argument<Boolean>("desktop") ?: false
+                              if (id == null) {
+                                  result.success(false)
+                              } else {
+                                  result.success(configureWebView(id, desktop))
+                              }
                           }
                           else -> result.notImplemented()
                       }
@@ -240,6 +414,23 @@ jobs:
             || { echo "ERROR: intent channel missing in MainActivity.kt"; exit 1; }
           echo "OK: custom MainActivity is wired correctly."
 
+      - name: Prepare Persistent Signing Key
+        run: |
+          # Har build ek hi signing key se sign hoga, taaki naya APK purane ke upar install ho sake.
+          mkdir -p "$HOME/.android" signing
+          if [ -f signing/debug.keystore ]; then
+            echo "Using existing signing key from repo."
+            echo "NEW_KEY=0" >> "$GITHUB_ENV"
+          else
+            echo "Creating signing key (first run only)..."
+            keytool -genkeypair -v -keystore signing/debug.keystore \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 36500 \
+              -dname "CN=Study Browser,O=Vajra,C=IN"
+            echo "NEW_KEY=1" >> "$GITHUB_ENV"
+          fi
+          cp signing/debug.keystore "$HOME/.android/debug.keystore"
+
       - name: Get Packages & Build Release APK
         run: |
           flutter pub get
@@ -250,3 +441,30 @@ jobs:
         with:
           name: Study-Browser-APK
           path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Print APK Signing Fingerprint
+        continue-on-error: true
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner 2>/dev/null | sort | tail -1)
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | head -5
+          else
+            echo "apksigner not found, skipping fingerprint print."
+          fi
+
+      - name: Backup New Signing Key (first run only)
+        if: env.NEW_KEY == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Study-Browser-Signing-Key
+          path: signing/debug.keystore
+
+      - name: Save New Signing Key To Repo (first run only)
+        if: env.NEW_KEY == '1'
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f signing/debug.keystore
+          git commit -m "Add persistent signing key (APK updates install over old version)"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
