@@ -35,6 +35,9 @@ class StudyBrowserApp extends StatelessWidget {
   }
 }
 
+// =============================================================================
+// DATA MODELS
+// =============================================================================
 class LockGroup {
   String id;
   String name;
@@ -66,7 +69,7 @@ class LockGroup {
 
   Map<String, dynamic> toJson() => {
         'id': id,
-        'name': id.isEmpty ? 'group' : name,
+        'name': name,
         'domains': domains,
         'passwordHash': passwordHash,
         'isLocked': isLocked,
@@ -101,23 +104,67 @@ class HistoryItem {
   String title;
   String url;
   String timestamp;
+  String dateGroup;
 
   HistoryItem({
     required this.title,
     required this.url,
     required this.timestamp,
+    required this.dateGroup,
   });
 
   Map<String, dynamic> toJson() => {
         'title': title,
         'url': url,
         'timestamp': timestamp,
+        'dateGroup': dateGroup,
       };
 
   factory HistoryItem.fromJson(Map<String, dynamic> json) => HistoryItem(
         title: (json['title'] ?? '').toString(),
         url: (json['url'] ?? '').toString(),
         timestamp: (json['timestamp'] ?? '').toString(),
+        dateGroup: (json['dateGroup'] ?? 'Today').toString(),
+      );
+}
+
+class DownloadEntry {
+  String id;
+  String title;
+  String url;
+  String filePath;
+  String sizeLabel;
+  String category; // Pages, Videos, Images, Other
+  String dateLabel;
+
+  DownloadEntry({
+    required this.id,
+    required this.title,
+    required this.url,
+    required this.filePath,
+    required this.sizeLabel,
+    required this.category,
+    required this.dateLabel,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'url': url,
+        'filePath': filePath,
+        'sizeLabel': sizeLabel,
+        'category': category,
+        'dateLabel': dateLabel,
+      };
+
+  factory DownloadEntry.fromJson(Map<String, dynamic> json) => DownloadEntry(
+        id: (json['id'] ?? '').toString(),
+        title: (json['title'] ?? 'Downloaded File').toString(),
+        url: (json['url'] ?? '').toString(),
+        filePath: (json['filePath'] ?? '').toString(),
+        sizeLabel: (json['sizeLabel'] ?? '1.12 MB').toString(),
+        category: (json['category'] ?? 'Other').toString(),
+        dateLabel: (json['dateLabel'] ?? 'Today').toString(),
       );
 }
 
@@ -127,9 +174,7 @@ class BrowserTab {
   String url;
   bool isIncognito;
   bool isDesktop;
-  int progress = 0;
-  bool bootstrapped = false;
-  late WebViewController controller;
+  String? groupId;
 
   BrowserTab({
     required this.id,
@@ -137,9 +182,57 @@ class BrowserTab {
     required this.url,
     this.isIncognito = false,
     this.isDesktop = false,
+    this.groupId,
   });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'url': url,
+        'isIncognito': isIncognito,
+        'isDesktop': isDesktop,
+        'groupId': groupId,
+      };
+
+  factory BrowserTab.fromJson(Map<String, dynamic> json) => BrowserTab(
+        id: (json['id'] ?? DateTime.now().millisecondsSinceEpoch.toString())
+            .toString(),
+        title: (json['title'] ?? 'New Tab').toString(),
+        url: (json['url'] ?? 'https://www.google.com').toString(),
+        isIncognito: json['isIncognito'] == true,
+        isDesktop: json['isDesktop'] == true,
+        groupId: json['groupId']?.toString(),
+      );
 }
 
+class BrowserTabGroup {
+  String id;
+  String title;
+  int colorValue;
+
+  BrowserTabGroup({
+    required this.id,
+    required this.title,
+    required this.colorValue,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'colorValue': colorValue,
+      };
+
+  factory BrowserTabGroup.fromJson(Map<String, dynamic> json) =>
+      BrowserTabGroup(
+        id: (json['id'] ?? '').toString(),
+        title: (json['title'] ?? 'Study Group').toString(),
+        colorValue: (json['colorValue'] ?? 0xFF3B82F6) as int,
+      );
+}
+
+// =============================================================================
+// MAIN BROWSER SCREEN
+// =============================================================================
 class BrowserHomeScreen extends StatefulWidget {
   const BrowserHomeScreen({super.key});
 
@@ -151,65 +244,39 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   static const MethodChannel _intentChannel =
       MethodChannel('study_browser/intent');
 
-  // User-Agent (Chrome jaisa). Desktop mode mein desktop UA + wide viewport lagta hai.
-  String _mobileUserAgent =
-      'Mozilla/5.0 (Linux; Android 14; RMX3395) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36';
-  String _desktopUserAgent =
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
+  static const String _mobileUserAgent =
+      'Mozilla/5.0 (Linux; Android 14; RMX3395) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
+  static const String _desktopUserAgent =
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
-  static const int _maxTabs = 10;
-  int _tabSeq = 0;
-  final FocusNode _urlFocus = FocusNode();
-
-  // Fullscreen video state
-  bool _fullscreenActive = false;
-  VoidCallback? _fullscreenHideCb;
-
-  // File types
-  static const List<String> _viewerExts = [
-    '.pdf',
-    '.doc',
-    '.docx',
-    '.ppt',
-    '.pptx',
-    '.xls',
-    '.xlsx',
-  ];
-  static const List<String> _downloadExts = [
-    '.zip',
-    '.rar',
-    '.7z',
-    '.apk',
-    '.tar',
-    '.gz',
-  ];
-  static const List<String> _mediaExts = ['.mp3', '.mp4'];
-
-  // Har tab ka apna WebViewController hai (asli multi-tab)
-  BrowserTab get _activeTab => _tabs[_activeTabIndex];
-  WebViewController get _webController => _activeTab.controller;
+  late final WebViewController _webController;
   final TextEditingController _urlController = TextEditingController();
   final TextEditingController _findController = TextEditingController();
 
   Timer? _lockEnforcementTimer;
+  Timer? _zoomAutoHideTimer;
   bool _webViewReady = false;
 
   int _loadingProgress = 0;
   String _currentUrl = 'https://www.google.com';
   String _pageTitle = 'Google';
 
-  // Browser Enhancements State
-  bool get _isDesktopMode => _tabs.isNotEmpty && _activeTab.isDesktop;
-  bool get _isIncognito => _tabs.isNotEmpty && _activeTab.isIncognito;
+  // Browser States
+  bool _isDesktopMode = false;
+  bool _isIncognito = false;
   bool _isReadingMode = false;
   bool _showFindBar = false;
   bool _showZoomBar = false;
   int _zoomPercent = 100;
+  String _searchEngineUrl = 'https://www.google.com/search?q=';
+  String _homepageUrl = 'https://www.google.com';
 
   List<BrowserTab> _tabs = [];
+  List<BrowserTabGroup> _tabGroups = [];
+  List<BrowserTab> _recentlyClosedTabs = [];
   int _activeTabIndex = 0;
 
-  // Focus & Feature Locks State
+  // Focus & Lock States
   bool _blockYtShorts = true;
   bool _hideYtFeed = false;
   bool _blockIgReels = true;
@@ -221,7 +288,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     'google.com',
     'google.co.in',
     'youtube.com',
-    'youtu.be',
     'wikipedia.org',
     'ncert.nic.in',
     'upsc.gov.in',
@@ -232,7 +298,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   List<LockGroup> _lockGroups = [];
   List<BookmarkItem> _bookmarks = [];
   List<HistoryItem> _history = [];
-  List<String> _downloads = [];
+  List<DownloadEntry> _downloads = [];
 
   // Blocked Overlay State
   bool _isPageBlocked = false;
@@ -242,54 +308,47 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
 
   static const String _focusFilterJs = r'''
     (function() {
-      function sbViewport() {
-        var head = document.head || document.documentElement;
-        if (!head) return;
-        var metas = document.querySelectorAll('meta[name="viewport"]');
-        var vp = metas.length ? metas[0] : null;
-        if (window.__SB_DESKTOP_MODE) {
-          var sw = (window.screen && window.screen.width) ? window.screen.width : 412;
-          var scale = Math.min(1, sw / 1280);
-          var want = 'width=1280, initial-scale=' + scale.toFixed(3) + ', minimum-scale=0.1, maximum-scale=5, user-scalable=yes';
-          if (!vp) {
-            vp = document.createElement('meta');
-            vp.setAttribute('name', 'viewport');
-            head.appendChild(vp);
-          }
-          if (vp.getAttribute('content') !== want) {
-            vp.setAttribute('content', want);
-          }
-          for (var i = 1; i < metas.length; i++) {
-            if (metas[i].parentNode) metas[i].parentNode.removeChild(metas[i]);
-          }
-          if (!document.getElementById('sb-desktop-style')) {
-            var ds = document.createElement('style');
-            ds.id = 'sb-desktop-style';
-            ds.textContent = 'html{-webkit-text-size-adjust:100% !important;text-size-adjust:100% !important;}';
-            head.appendChild(ds);
-          }
-        } else {
-          if (vp && (vp.getAttribute('content') || '').indexOf('width=1280') !== -1) {
-            vp.setAttribute('content', 'width=device-width, initial-scale=1.0');
-          }
-          var old = document.getElementById('sb-desktop-style');
-          if (old && old.parentNode) old.parentNode.removeChild(old);
-        }
-      }
-
       function applyRules() {
         var host = (window.location.hostname || '').toLowerCase();
         var path = window.location.pathname || '';
 
-        // Desktop Viewport Enforcement (Chrome 'Desktop site' jaisa)
-        sbViewport();
-
-        // Page Zoom Enforcement
-        if (document.body && window.__SB_ZOOM_PERCENT) {
-          document.body.style.zoom = window.__SB_ZOOM_PERCENT + '%';
+        // 1. REAL DESKTOP SITE VIEWPORT & SCALING
+        var vpMeta = document.querySelector('meta[name="viewport"]');
+        if (window.__SB_DESKTOP_MODE) {
+          var screenW = window.screen.width || 360;
+          var targetScale = (screenW / 1280.0).toFixed(3);
+          var desiredContent = 'width=1280, initial-scale=' + targetScale + ', minimum-scale=0.1, maximum-scale=5.0, user-scalable=yes';
+          if (!vpMeta) {
+            vpMeta = document.createElement('meta');
+            vpMeta.name = 'viewport';
+            document.head.appendChild(vpMeta);
+          }
+          if (vpMeta.getAttribute('content') !== desiredContent) {
+            vpMeta.setAttribute('content', desiredContent);
+          }
+          // Fallback if WebView layout width is still narrow
+          if (window.innerWidth > 0 && window.innerWidth < 980 && document.documentElement) {
+            document.documentElement.style.minWidth = '1280px';
+          }
+        } else {
+          if (vpMeta && vpMeta.getAttribute('content') && vpMeta.getAttribute('content').includes('width=1280')) {
+            vpMeta.setAttribute('content', 'width=device-width, initial-scale=1.0');
+          }
+          if (document.documentElement && document.documentElement.style.minWidth === '1280px') {
+            document.documentElement.style.minWidth = '';
+          }
         }
 
-        // 1. YouTube Shorts & Feed Control
+        // 2. PAGE ZOOM CONTROL
+        if (document.body && window.__SB_ZOOM_PERCENT) {
+          if (window.__SB_ZOOM_PERCENT !== 100) {
+            document.body.style.zoom = window.__SB_ZOOM_PERCENT + '%';
+          } else if (document.body.style.zoom) {
+            document.body.style.zoom = '';
+          }
+        }
+
+        // 3. YOUTUBE SHORTS & FEED BLOCKER
         if (host.includes('youtube.com')) {
           if (window.__SB_YT_SHORTS) {
             if (path.startsWith('/shorts')) {
@@ -342,7 +401,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           }
         }
 
-        // 2. Instagram Reels & Explore Control
+        // 4. INSTAGRAM REELS & EXPLORE BLOCKER
         if (host.includes('instagram.com')) {
           if (window.__SB_IG_REELS) {
             if (path.startsWith('/reels') || path.startsWith('/reel/') || path.startsWith('/explore')) {
@@ -372,18 +431,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
 
       if (!window.__SB_INTERVAL_SET) {
         window.__SB_INTERVAL_SET = true;
-        setInterval(applyRules, 400);
-      }
-      if (document.head && !window.__SB_VP_OBSERVER) {
-        window.__SB_VP_OBSERVER = true;
-        try {
-          var vpTimer = null;
-          var mo = new MutationObserver(function() {
-            if (vpTimer) return;
-            vpTimer = setTimeout(function() { vpTimer = null; sbViewport(); }, 30);
-          });
-          mo.observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ['content'] });
-        } catch (e) {}
+        setInterval(applyRules, 350);
       }
       applyRules();
     })();
@@ -392,14 +440,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   @override
   void initState() {
     super.initState();
-    _urlFocus.addListener(() {
-      if (_urlFocus.hasFocus) {
-        _urlController.selection = TextSelection(
-          baseOffset: 0,
-          extentOffset: _urlController.text.length,
-        );
-      }
-    });
     _setupWebViewController();
     _setupIntentListener();
     _bootBrowser();
@@ -409,14 +449,13 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   @override
   void dispose() {
     _lockEnforcementTimer?.cancel();
+    _zoomAutoHideTimer?.cancel();
     _urlController.dispose();
     _findController.dispose();
-    _urlFocus.dispose();
     super.dispose();
   }
 
   void _startLockEnforcementTimer() {
-    // हर 2 सेकंड में चेक करता है कि 10-मिनट अनलॉक खत्म हुआ या नहीं
     _lockEnforcementTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!mounted || !_webViewReady) return;
       if (!_isPageBlocked && _currentUrl.isNotEmpty) {
@@ -429,29 +468,18 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   void _setupIntentListener() {
-    // Native (Kotlin) se aane wale events: naya link / download request
     _intentChannel.setMethodCallHandler((call) async {
       if (call.method == 'onNewIntentUrl') {
         final String? incoming = call.arguments as String?;
         if (incoming != null && incoming.trim().isNotEmpty) {
-          // Bahar ka link naye tab mein khulta hai (Chrome jaisa)
-          _createNewTab(url: incoming.trim());
-        }
-      } else if (call.method == 'onDownloadRequested') {
-        final args = call.arguments;
-        if (args is Map) {
-          _handleNativeDownloadRequest(args);
+          _createNewTab(incognito: false, url: incoming.trim());
         }
       }
-      return null;
     });
   }
 
   Future<void> _bootBrowser() async {
     await _loadSavedData();
-    await _applyUserAgent(_activeTab);
-    await _configureNativeWebView(_activeTab);
-
     String? initialExternalUrl;
     try {
       initialExternalUrl =
@@ -459,12 +487,38 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     } catch (_) {}
 
     if (initialExternalUrl != null && initialExternalUrl.trim().isNotEmpty) {
-      // बाहर से लिंक क्लिक होने पर सीधा वही लिंक लोड होगा (Lock चेक के साथ)
-      _loadFromSearchBar(initialExternalUrl.trim());
+      _createNewTab(incognito: false, url: initialExternalUrl.trim());
     } else {
-      // सामान्य तरीके से ऐप खोलने पर Google लोड होगा
-      _loadFromSearchBar('https://www.google.com');
+      if (_tabs.isEmpty) {
+        _tabs = [
+          BrowserTab(
+            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            title: 'Google',
+            url: _homepageUrl,
+          ),
+        ];
+        _activeTabIndex = 0;
+      }
+      if (_activeTabIndex >= _tabs.length) {
+        _activeTabIndex = _tabs.length - 1;
+      }
+      final activeTab = _tabs[_activeTabIndex];
+      _isDesktopMode = activeTab.isDesktop;
+      _isIncognito = activeTab.isIncognito;
+      await _applyNativeDesktopViewport(_isDesktopMode);
+      _loadFromSearchBar(activeTab.url);
     }
+  }
+
+  Future<void> _applyNativeDesktopViewport(bool isDesktop) async {
+    await _webController.setUserAgent(
+      isDesktop ? _desktopUserAgent : _mobileUserAgent,
+    );
+    try {
+      await _intentChannel.invokeMethod('setDesktopViewport', {
+        'isDesktop': isDesktop,
+      });
+    } catch (_) {}
   }
 
   String _hashPassword(String input) {
@@ -496,6 +550,25 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     return '$m:$s';
   }
 
+  String _todayLabel() {
+    final now = DateTime.now();
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
+    return 'Today - ${now.day} ${months[now.month - 1]} ${now.year}';
+  }
+
   Future<void> _loadSavedData() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
@@ -506,10 +579,59 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       _whitelistMode = prefs.getBool('whitelistMode') ?? false;
       _featurePassHash = prefs.getString('featurePassHash') ?? '';
       _featureTempUnlockUntil = prefs.getInt('featureTempUnlockUntil') ?? 0;
+      _homepageUrl =
+          prefs.getString('homepageUrl') ?? 'https://www.google.com';
+      _searchEngineUrl = prefs.getString('searchEngineUrl') ??
+          'https://www.google.com/search?q=';
 
       final savedWhitelist = prefs.getStringList('whitelistedDomains');
       if (savedWhitelist != null && savedWhitelist.isNotEmpty) {
         _whitelistedDomains = savedWhitelist;
+      }
+
+      // Restore Saved Open Tabs & Tab Groups (So refreshing/killing app never loses tabs!)
+      final savedTabsJson = prefs.getString('savedBrowserTabs');
+      if (savedTabsJson != null) {
+        try {
+          final List decoded = jsonDecode(savedTabsJson);
+          _tabs = decoded
+              .map((e) =>
+                  BrowserTab.fromJson(Map<String, dynamic>.from(e as Map)))
+              .toList();
+        } catch (_) {}
+      }
+      if (_tabs.isEmpty) {
+        _tabs = [
+          BrowserTab(
+            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            title: 'Google',
+            url: _homepageUrl,
+          ),
+        ];
+      }
+      _activeTabIndex =
+          (prefs.getInt('savedActiveTabIndex') ?? 0).clamp(0, _tabs.length - 1);
+
+      final savedTabGroupsJson = prefs.getString('savedTabGroups');
+      if (savedTabGroupsJson != null) {
+        try {
+          final List decoded = jsonDecode(savedTabGroupsJson);
+          _tabGroups = decoded
+              .map((e) => BrowserTabGroup.fromJson(
+                  Map<String, dynamic>.from(e as Map)))
+              .toList();
+        } catch (_) {}
+      }
+
+      final savedClosedJson = prefs.getString('savedRecentlyClosed');
+      if (savedClosedJson != null) {
+        try {
+          final List decoded = jsonDecode(savedClosedJson);
+          _recentlyClosedTabs = decoded
+              .map((e) =>
+                  BrowserTab.fromJson(Map<String, dynamic>.from(e as Map)))
+              .toList();
+        } catch (_) {}
       }
 
       final groupsJson = prefs.getString('lockGroups');
@@ -546,6 +668,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             .toList();
       } else {
         _bookmarks = [
+          BookmarkItem(
+              title: 'GD Practice Hub',
+              url: 'https://gd-practice-hub.vercel.app'),
           BookmarkItem(title: 'Google Search', url: 'https://www.google.com'),
           BookmarkItem(title: 'YouTube Study', url: 'https://m.youtube.com'),
           BookmarkItem(title: 'NCERT Portal', url: 'https://ncert.nic.in'),
@@ -561,9 +686,15 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             .toList();
       }
 
-      final savedDownloads = prefs.getStringList('downloadsList');
-      if (savedDownloads != null) {
-        _downloads = savedDownloads;
+      final dlJson = prefs.getString('downloadEntriesV2');
+      if (dlJson != null) {
+        try {
+          final List decoded = jsonDecode(dlJson);
+          _downloads = decoded
+              .map((e) =>
+                  DownloadEntry.fromJson(Map<String, dynamic>.from(e as Map)))
+              .toList();
+        } catch (_) {}
       }
     });
   }
@@ -576,7 +707,22 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     await prefs.setBool('whitelistMode', _whitelistMode);
     await prefs.setString('featurePassHash', _featurePassHash);
     await prefs.setInt('featureTempUnlockUntil', _featureTempUnlockUntil);
+    await prefs.setString('homepageUrl', _homepageUrl);
+    await prefs.setString('searchEngineUrl', _searchEngineUrl);
     await prefs.setStringList('whitelistedDomains', _whitelistedDomains);
+    await prefs.setString(
+      'savedBrowserTabs',
+      jsonEncode(_tabs.map((t) => t.toJson()).toList()),
+    );
+    await prefs.setInt('savedActiveTabIndex', _activeTabIndex);
+    await prefs.setString(
+      'savedTabGroups',
+      jsonEncode(_tabGroups.map((g) => g.toJson()).toList()),
+    );
+    await prefs.setString(
+      'savedRecentlyClosed',
+      jsonEncode(_recentlyClosedTabs.map((t) => t.toJson()).toList()),
+    );
     await prefs.setString(
       'lockGroups',
       jsonEncode(_lockGroups.map((g) => g.toJson()).toList()),
@@ -589,381 +735,284 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       'historyItems',
       jsonEncode(_history.map((h) => h.toJson()).toList()),
     );
-    await prefs.setStringList('downloadsList', _downloads);
+    await prefs.setString(
+      'downloadEntriesV2',
+      jsonEncode(_downloads.map((d) => d.toJson()).toList()),
+    );
   }
 
   void _setupWebViewController() {
-    final first = _newTab();
-    _tabs = [first];
-    _activeTabIndex = 0;
+    _webController = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0xFF12151C))
+      ..setUserAgent(_mobileUserAgent)
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onProgress: (progress) {
+            if (mounted) {
+              setState(() => _loadingProgress = progress);
+            }
+            _injectFocusScripts();
+          },
+          onPageStarted: (url) {
+            if (url == 'about:blank') return;
+            final allowed = _evaluateUrl(url, showOverlayOnBlock: true);
+            if (!allowed) {
+              _webController.loadRequest(Uri.parse('about:blank'));
+              return;
+            }
+            if (mounted) {
+              setState(() {
+                _currentUrl = url;
+                _urlController.text = url;
+                _syncActiveTab(url: url);
+              });
+            }
+            _applyNativeDesktopViewport(_isDesktopMode);
+            _injectFocusScripts();
+          },
+          onPageFinished: (url) async {
+            if (url == 'about:blank') return;
+            await _applyNativeDesktopViewport(_isDesktopMode);
+            _injectFocusScripts();
+            try {
+              final titleObj = await _webController
+                  .runJavaScriptReturningResult('document.title');
+              final cleanTitle =
+                  titleObj.toString().replaceAll('"', '').trim();
+              if (mounted && cleanTitle.isNotEmpty) {
+                setState(() {
+                  _pageTitle = cleanTitle;
+                  _syncActiveTab(title: cleanTitle, url: url);
+                });
+              }
+              _recordHistory(cleanTitle.isEmpty ? url : cleanTitle, url);
+            } catch (_) {
+              _recordHistory(url, url);
+            }
+          },
+          onUrlChange: (change) {
+            final newUrl = change.url ?? '';
+            if (newUrl.isEmpty || newUrl == 'about:blank') return;
+            final allowed = _evaluateUrl(newUrl, showOverlayOnBlock: true);
+            if (!allowed) {
+              _webController.loadRequest(Uri.parse('about:blank'));
+              return;
+            }
+            if (mounted) {
+              setState(() {
+                _currentUrl = newUrl;
+                _urlController.text = newUrl;
+                _syncActiveTab(url: newUrl);
+              });
+            }
+            _injectFocusScripts();
+          },
+          onNavigationRequest: (request) {
+            final reqUrl = request.url;
+            if (reqUrl == 'about:blank') return NavigationDecision.navigate;
+
+            final allowed = _evaluateUrl(reqUrl, showOverlayOnBlock: true);
+            if (!allowed) {
+              return NavigationDecision.prevent;
+            }
+
+            // Detect direct downloadable files (.pdf, .zip, .apk, video, image, etc.)
+            final lower = reqUrl.toLowerCase().split('?').first;
+            if (lower.endsWith('.pdf') ||
+                lower.endsWith('.zip') ||
+                lower.endsWith('.apk') ||
+                lower.endsWith('.doc') ||
+                lower.endsWith('.docx') ||
+                lower.endsWith('.mp3') ||
+                lower.endsWith('.mp4') ||
+                lower.endsWith('.jpg') ||
+                lower.endsWith('.png')) {
+              _triggerRealFileDownload(reqUrl);
+              return NavigationDecision.prevent;
+            }
+
+            return NavigationDecision.navigate;
+          },
+        ),
+      );
     _webViewReady = true;
   }
 
-  BrowserTab _newTab({
-    String url = 'https://www.google.com',
-    bool incognito = false,
-  }) {
-    final tab = BrowserTab(
-      id: '${DateTime.now().microsecondsSinceEpoch}_${_tabSeq++}',
-      title: incognito ? 'Private Tab' : 'New Tab',
-      url: url,
-      isIncognito: incognito,
-    );
-    tab.controller = _buildController(tab);
-    return tab;
+  String _detectDownloadCategory(String nameOrUrl) {
+    final lower = nameOrUrl.toLowerCase().split('?').first;
+    if (lower.endsWith('.mp4') ||
+        lower.endsWith('.mkv') ||
+        lower.endsWith('.webm')) {
+      return 'Videos';
+    }
+    if (lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.png') ||
+        lower.endsWith('.webp')) {
+      return 'Images';
+    }
+    if (lower.endsWith('.html') ||
+        lower.endsWith('.htm') ||
+        lower.endsWith('.mhtml')) {
+      return 'Pages';
+    }
+    return 'Other';
   }
 
-  bool _isActiveTab(BrowserTab tab) {
-    return _tabs.isNotEmpty &&
-        _activeTabIndex < _tabs.length &&
-        identical(_tabs[_activeTabIndex], tab);
-  }
-
-  WebViewController _buildController(BrowserTab tab) {
-    final controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0xFF12151C))
-      ..setNavigationDelegate(_buildNavigationDelegate(tab));
-    _configurePlatformFeatures(controller);
-    return controller;
-  }
-
-  NavigationDelegate _buildNavigationDelegate(BrowserTab tab) {
-    return NavigationDelegate(
-      onProgress: (progress) {
-        tab.progress = progress;
-        if (_isActiveTab(tab) && mounted) {
-          setState(() => _loadingProgress = progress);
-        }
-        // Script har tick par nahi, page ke shuru mein ek baar chalti hai
-        if (!tab.bootstrapped && progress >= 15) {
-          tab.bootstrapped = true;
-          _injectFocusScripts(tab);
-        }
-      },
-      onPageStarted: (url) {
-        tab.bootstrapped = false;
-        if (url == 'about:blank') return;
-        final active = _isActiveTab(tab);
-        final allowed = _evaluateUrl(url, showOverlayOnBlock: active);
-        if (!allowed) {
-          tab.controller.loadRequest(Uri.parse('about:blank'));
-          return;
-        }
-        tab.url = url;
-        if (active && mounted) {
-          setState(() {
-            _currentUrl = url;
-            _setUrlText(url);
-          });
-        }
-        _injectFocusScripts(tab);
-      },
-      onPageFinished: (url) async {
-        if (url == 'about:blank') return;
-        tab.progress = 100;
-        tab.bootstrapped = true;
-        if (_isActiveTab(tab) && mounted) {
-          setState(() => _loadingProgress = 100);
-        }
-        _injectFocusScripts(tab);
-        String cleanTitle = '';
-        try {
-          final titleObj =
-              await tab.controller.runJavaScriptReturningResult('document.title');
-          cleanTitle = _decodeJsString(titleObj);
-        } catch (_) {}
-        if (!mounted) return;
-        tab.url = url;
-        if (cleanTitle.isNotEmpty) {
-          tab.title = cleanTitle;
-          if (_isActiveTab(tab)) {
-            setState(() => _pageTitle = cleanTitle);
-          }
-        }
-        _recordHistory(
-          cleanTitle.isEmpty ? url : cleanTitle,
-          url,
-          incognito: tab.isIncognito,
-        );
-      },
-      onUrlChange: (change) {
-        final newUrl = change.url ?? '';
-        if (newUrl.isEmpty || newUrl == 'about:blank') return;
-        final active = _isActiveTab(tab);
-        final allowed = _evaluateUrl(newUrl, showOverlayOnBlock: active);
-        if (!allowed) {
-          tab.controller.loadRequest(Uri.parse('about:blank'));
-          return;
-        }
-        tab.url = newUrl;
-        if (active && mounted) {
-          setState(() {
-            _currentUrl = newUrl;
-            _setUrlText(newUrl);
-          });
-        }
-        _injectFocusScripts(tab);
-      },
-      onNavigationRequest: (request) {
-        final reqUrl = request.url;
-        if (reqUrl == 'about:blank') return NavigationDecision.navigate;
-        final active = _isActiveTab(tab);
-
-        // Desktop mode mein mobile (m.) links ko desktop version par bhejo
-        if (request.isMainFrame && tab.isDesktop) {
-          final rewritten = _normalizeUrlForMode(reqUrl, desktop: true);
-          if (rewritten != reqUrl && Uri.tryParse(rewritten) != null) {
-            tab.controller.loadRequest(Uri.parse(rewritten));
-            return NavigationDecision.prevent;
-          }
-        }
-
-        final allowed = _evaluateUrl(
-          reqUrl,
-          showOverlayOnBlock: active,
-          fromNavRequest: true,
-        );
-        if (!allowed) return NavigationDecision.prevent;
-
-        if (request.isMainFrame) {
-          if (_hasExt(reqUrl, _viewerExts)) {
-            // PDF / Office files browser ke andar viewer mein khulti hain
-            _rememberDownload(reqUrl);
-            _openDocViewer(tab, reqUrl);
-            return NavigationDecision.prevent;
-          }
-          if (_hasExt(reqUrl, _downloadExts)) {
-            _rememberDownload(reqUrl);
-            _startDownload(reqUrl);
-            return NavigationDecision.prevent;
-          }
-          if (_hasExt(reqUrl, _mediaExts)) {
-            _rememberDownload(reqUrl);
-          }
-        }
-        return NavigationDecision.navigate;
-      },
-    );
-  }
-
-  /// Fullscreen video aur file upload (webview_flutter_android ke features).
-  /// Dynamic call hai, isliye library version badalne par bhi build nahi tutega.
-  void _configurePlatformFeatures(WebViewController controller) {
+  Future<void> _triggerRealFileDownload(String url) async {
     try {
-      final dynamic platform = (controller as dynamic).platform;
-      platform.setCustomWidgetCallbacks(
-        onShowCustomWidget: (dynamic widget, dynamic onHidden) {
-          _enterFullscreen(widget as Widget, () {
-            try {
-              onHidden();
-            } catch (_) {}
-          });
-        },
-        onHideCustomWidget: () {
-          _exitFullscreenFromWeb();
-        },
-      );
-    } catch (_) {}
-    try {
-      final dynamic platform = (controller as dynamic).platform;
-      platform.setOnShowFileSelector((dynamic params) async {
-        return await _pickFilesForWeb(params);
+      final res = await _intentChannel.invokeMethod('downloadFile', {
+        'url': url,
       });
-    } catch (_) {}
-  }
+      String fileName = url.split('/').last.split('?').first;
+      if (fileName.isEmpty) fileName = 'Downloaded_File';
+      String filePath = '/storage/emulated/0/Download/$fileName';
+      String sizeLabel = 'Downloaded';
 
-  Future<List<String>> _pickFilesForWeb(dynamic params) async {
-    bool multiple = false;
-    List<String> types = <String>[];
-    try {
-      multiple = params.mode.toString().toLowerCase().contains('multiple');
-    } catch (_) {}
-    try {
-      types = List<String>.from(params.acceptTypes as List);
-    } catch (_) {}
-    try {
-      final res = await _intentChannel.invokeMethod<List<dynamic>>(
-        'pickFiles',
-        <String, dynamic>{'multiple': multiple, 'types': types},
+      if (res is Map) {
+        fileName = (res['fileName'] ?? fileName).toString();
+        filePath = (res['filePath'] ?? filePath).toString();
+        sizeLabel = (res['sizeLabel'] ?? 'Saved in Downloads').toString();
+      }
+
+      final entry = DownloadEntry(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        title: fileName,
+        url: url,
+        filePath: filePath,
+        sizeLabel: sizeLabel,
+        category: _detectDownloadCategory(fileName),
+        dateLabel: _todayLabel(),
       );
-      return (res ?? <dynamic>[]).map((e) => e.toString()).toList();
+
+      setState(() => _downloads.insert(0, entry));
+      await _saveData();
+      _showDownloadBanner(entry);
+    } catch (_) {}
+  }
+
+  Future<void> _downloadCurrentPageOffline() async {
+    // Chrome-style confirmation or immediate offline page save
+    try {
+      final rawHtmlObj = await _webController.runJavaScriptReturningResult(
+          'document.documentElement.outerHTML');
+      String htmlString = rawHtmlObj.toString();
+      if (htmlString.startsWith('"') && htmlString.endsWith('"')) {
+        try {
+          htmlString = jsonDecode(htmlString).toString();
+        } catch (_) {}
+      }
+
+      final titleToSave = _pageTitle.isNotEmpty ? _pageTitle : 'Web_Page';
+      final res = await _intentChannel.invokeMethod('saveOfflinePage', {
+        'title': titleToSave,
+        'html': htmlString,
+      });
+
+      if (res is Map) {
+        final fileName = (res['fileName'] ?? '$titleToSave.html').toString();
+        final filePath = (res['filePath'] ?? '').toString();
+        final sizeLabel = (res['sizeLabel'] ?? '1.12 MB').toString();
+
+        final entry = DownloadEntry(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          title: titleToSave,
+          url: _currentUrl,
+          filePath: filePath,
+          sizeLabel: sizeLabel,
+          category: 'Pages',
+          dateLabel: _todayLabel(),
+        );
+
+        setState(() => _downloads.insert(0, entry));
+        await _saveData();
+        _showDownloadBanner(entry);
+      } else {
+        _showToast('पेज ऑफलाइन सेव कर लिया गया');
+      }
     } catch (_) {
-      return <String>[];
+      _triggerRealFileDownload(_currentUrl);
     }
   }
 
-  void _enterFullscreen(Widget widget, VoidCallback onHidden) {
-    if (!mounted) {
-      onHidden();
-      return;
-    }
-    _fullscreenActive = true;
-    _fullscreenHideCb = onHidden;
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    SystemChrome.setPreferredOrientations(const [
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
-    Navigator.of(context)
-        .push(
-      MaterialPageRoute<void>(
-        fullscreenDialog: true,
-        builder: (_) => Scaffold(
-          backgroundColor: Colors.black,
-          body: SizedBox.expand(child: widget),
+  void _showDownloadBanner(DownloadEntry entry) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: const Color(0xFF1E232E),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        duration: const Duration(seconds: 4),
+        content: Row(
+          children: [
+            const Icon(Icons.download_done, color: Color(0xFFA8C7FA), size: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'File downloaded',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13.5),
+                  ),
+                  Text(
+                    '(${entry.sizeLabel}) ${entry.title}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        action: SnackBarAction(
+          label: 'Open',
+          textColor: const Color(0xFFA8C7FA),
+          onPressed: () => _openDownloadEntry(entry),
         ),
       ),
-    )
-        .then((_) {
-      _restoreSystemUi();
-      if (_fullscreenActive) {
-        // User ne back dabaya: WebView ko batao ki fullscreen band hua
-        _fullscreenActive = false;
-        final cb = _fullscreenHideCb;
-        _fullscreenHideCb = null;
-        cb?.call();
+    );
+  }
+
+  Future<void> _openDownloadEntry(DownloadEntry entry) async {
+    final lowerPath = entry.filePath.toLowerCase();
+    final lowerUrl = entry.url.toLowerCase().split('?').first;
+
+    // If it's a ZIP, APK, PDF, Video, Audio, or physical file, trigger Android's native "Open with" chooser!
+    if (lowerPath.endsWith('.zip') ||
+        lowerPath.endsWith('.apk') ||
+        lowerPath.endsWith('.pdf') ||
+        lowerUrl.endsWith('.zip') ||
+        lowerUrl.endsWith('.apk') ||
+        lowerUrl.endsWith('.pdf')) {
+      final ok = await _intentChannel.invokeMethod<bool>('openWithSystem', {
+        'filePath': entry.filePath,
+        'url': entry.url,
+      });
+      if (ok != true && entry.url.isNotEmpty) {
+        _loadFromSearchBar(entry.url);
       }
-    });
-  }
-
-  void _exitFullscreenFromWeb() {
-    if (!_fullscreenActive) return;
-    _fullscreenActive = false;
-    _fullscreenHideCb = null;
-    if (mounted) {
-      Navigator.of(context).pop();
-    }
-  }
-
-  void _restoreSystemUi() {
-    SystemChrome.setEnabledSystemUIMode(
-      SystemUiMode.manual,
-      overlays: SystemUiOverlay.values,
-    );
-    SystemChrome.setPreferredOrientations(const [
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
-  }
-
-  /// Native WebView settings: desktop viewport + download listener.
-  Future<void> _configureNativeWebView(BrowserTab tab) async {
-    try {
-      final dynamic platform = (tab.controller as dynamic).platform;
-      final dynamic id = platform.webViewIdentifier;
-      await _intentChannel.invokeMethod<dynamic>(
-        'configureWebView',
-        <String, dynamic>{'id': id, 'desktop': tab.isDesktop},
-      );
-    } catch (_) {}
-  }
-
-  Future<void> _applyUserAgent(BrowserTab tab) async {
-    try {
-      await tab.controller.setUserAgent(
-        tab.isDesktop ? _desktopUserAgent : _mobileUserAgent,
-      );
-    } catch (_) {}
-  }
-
-  String _decodeJsString(Object? raw) {
-    var s = (raw ?? '').toString();
-    if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
-      try {
-        final decoded = jsonDecode(s);
-        if (decoded is String) return decoded.trim();
-      } catch (_) {}
-      s = s.substring(1, s.length - 1);
-    }
-    return s.trim();
-  }
-
-  void _setUrlText(String text) {
-    // User URL bar mein type kar raha ho to usse overwrite mat karo
-    if (_urlFocus.hasFocus) return;
-    _urlController.text = text;
-  }
-
-  bool _hasExt(String url, List<String> exts) {
-    final path = url.toLowerCase().split('#').first.split('?').first;
-    return exts.any((e) => path.endsWith(e));
-  }
-
-  void _rememberDownload(String url) {
-    if (!mounted) return;
-    if (_downloads.contains(url)) return;
-    setState(() {
-      _downloads.insert(0, url);
-      if (_downloads.length > 200) _downloads.removeLast();
-    });
-    _saveData();
-  }
-
-  void _openDocViewer(BrowserTab tab, String docUrl) {
-    final viewer =
-        'https://docs.google.com/gview?embedded=true&url=${Uri.encodeComponent(docUrl)}';
-    _showToast(
-      '📄 फ़ाइल viewer में खुल रही है',
-      actionLabel: 'डाउनलोड',
-      onAction: () => _startDownload(docUrl),
-    );
-    tab.controller.loadRequest(Uri.parse(viewer));
-  }
-
-  Future<void> _startDownload(
-    String url, {
-    String? userAgent,
-    String? contentDisposition,
-    String? mimeType,
-  }) async {
-    if (!(url.startsWith('http://') || url.startsWith('https://'))) {
-      _showToast('यह लिंक डाउनलोड नहीं किया जा सकता');
       return;
     }
-    try {
-      final name = await _intentChannel.invokeMethod<String>(
-        'downloadFile',
-        <String, dynamic>{
-          'url': url,
-          'userAgent': userAgent ??
-              (_isDesktopMode ? _desktopUserAgent : _mobileUserAgent),
-          'contentDisposition': contentDisposition,
-          'mimeType': mimeType,
-        },
-      );
-      _showToast('📥 डाउनलोड शुरू: ${name ?? ''}');
-    } catch (_) {
-      _showToast('डाउनलोड शुरू नहीं हो सका');
-    }
-  }
 
-  void _handleNativeDownloadRequest(Map args) {
-    final url = (args['url'] ?? '').toString();
-    if (!(url.startsWith('http://') || url.startsWith('https://'))) return;
-    final mime = (args['mimeType'] ?? '').toString().toLowerCase();
-    final ua = (args['userAgent'] ?? '').toString();
-    final disposition = (args['contentDisposition'] ?? '').toString();
-    if (!_evaluateUrl(url, showOverlayOnBlock: false, fromNavRequest: true)) {
+    // If it's a saved web page, offer to open in browser or system viewer
+    if (entry.category == 'Pages' && entry.url.isNotEmpty) {
+      _loadFromSearchBar(entry.url);
+      _showToast('Viewing saved page: ${entry.title}');
       return;
     }
-    _rememberDownload(url);
-    final isDoc = mime == 'application/pdf' ||
-        mime.contains('msword') ||
-        mime.contains('officedocument') ||
-        mime.contains('ms-excel') ||
-        mime.contains('ms-powerpoint');
-    if (isDoc) {
-      _openDocViewer(_activeTab, url);
-    } else {
-      _startDownload(
-        url,
-        userAgent: ua.isEmpty ? null : ua,
-        contentDisposition: disposition.isEmpty ? null : disposition,
-        mimeType: mime.isEmpty ? null : mime,
-      );
-    }
+
+    await _intentChannel.invokeMethod('openWithSystem', {
+      'filePath': entry.filePath,
+      'url': entry.url,
+    });
   }
 
   void _syncActiveTab({String? title, String? url}) {
@@ -971,33 +1020,39 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     final tab = _tabs[_activeTabIndex];
     if (title != null && title.isNotEmpty) tab.title = title;
     if (url != null && url.isNotEmpty) tab.url = url;
+    tab.isDesktop = _isDesktopMode;
+    tab.isIncognito = _isIncognito;
+    _saveData();
   }
 
-  void _recordHistory(String title, String url, {bool incognito = false}) {
-    // Private tab mein history save nahi hoti, lekin saare Locks kaam karte hain
-    if (incognito) return;
+  void _recordHistory(String title, String url) {
+    if (_isIncognito) return;
     if (url.isEmpty || url == 'about:blank') return;
     if (_history.isNotEmpty && _history.first.url == url) return;
 
     final now = DateTime.now();
     final timeStr =
-        '${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
 
     setState(() {
       _history.insert(
         0,
-        HistoryItem(title: title, url: url, timestamp: timeStr),
+        HistoryItem(
+          title: title,
+          url: url,
+          timestamp: timeStr,
+          dateGroup: _todayLabel(),
+        ),
       );
-      if (_history.length > 100) {
+      if (_history.length > 150) {
         _history.removeLast();
       }
     });
     _saveData();
   }
 
-  Future<void> _injectFocusScripts([BrowserTab? target]) async {
-    if (!_webViewReady || _tabs.isEmpty) return;
-    final tab = target ?? _activeTab;
+  Future<void> _injectFocusScripts() async {
+    if (!_webViewReady) return;
     try {
       final bool shortsActive =
           _blockYtShorts && (_featurePassHash.isEmpty || _isFeatureLockActive);
@@ -1010,79 +1065,40 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         window.__SB_YT_SHORTS = $shortsActive;
         window.__SB_YT_FEED = $feedActive;
         window.__SB_IG_REELS = $igActive;
-        window.__SB_DESKTOP_MODE = ${tab.isDesktop};
+        window.__SB_DESKTOP_MODE = $_isDesktopMode;
         window.__SB_ZOOM_PERCENT = $_zoomPercent;
       ''';
-      await tab.controller.runJavaScript(flagsJs);
-      await tab.controller.runJavaScript(_focusFilterJs);
+      await _webController.runJavaScript(flagsJs);
+      await _webController.runJavaScript(_focusFilterJs);
     } catch (_) {}
   }
 
-  // ---------------------------------------------------------------------
-  // Domain matching (strict = whitelist ke liye, loose = block groups ke liye)
-  // ---------------------------------------------------------------------
-  String _cleanRuleDomain(String raw) {
-    var s = raw.toLowerCase().trim();
-    s = s.replaceFirst(RegExp(r'^[a-z][a-z0-9+.-]*://'), '');
-    s = s.split('/').first.split('?').first.split('#').first;
-    if (s.startsWith('www.')) s = s.substring(4);
-    if (s.startsWith('m.')) s = s.substring(2);
-    return s.trim();
-  }
+  bool _domainMatches(String host, String fullUrl, String ruleDomain) {
+    final cleanRule = ruleDomain
+        .toLowerCase()
+        .replaceAll('https://', '')
+        .replaceAll('http://', '')
+        .replaceAll('www.', '')
+        .replaceAll('m.', '')
+        .split('/')
+        .first
+        .trim();
+    if (cleanRule.isEmpty) return false;
 
-  String _stripHostPrefix(String host) {
-    var h = host.toLowerCase();
-    if (h.startsWith('www.')) h = h.substring(4);
-    if (h.startsWith('m.')) h = h.substring(2);
-    return h;
-  }
-
-  bool _hostIs(String host, String domain) {
-    final h = host.toLowerCase();
-    return h == domain || h.endsWith('.$domain');
-  }
-
-  /// Sirf host match: example.com ya *.example.com (Google Translate proxy bhi).
-  bool _hostMatchesStrict(String host, String ruleDomain) {
-    final rule = _cleanRuleDomain(ruleDomain);
-    if (rule.isEmpty) return false;
-    final h = _stripHostPrefix(host);
-    if (h == rule || h.endsWith('.$rule')) return true;
-
-    // translate.goog proxy: en-wikipedia-org.translate.goog
-    const proxySuffix = '.translate.goog';
-    if (h.endsWith(proxySuffix)) {
-      final label = h.substring(0, h.length - proxySuffix.length);
-      final hyphen = rule.replaceAll('.', '-');
-      if (label == hyphen) return true;
-      if (label.endsWith('-$hyphen') && !label.endsWith('--$hyphen')) {
-        return true;
-      }
+    final cleanHost =
+        host.toLowerCase().replaceAll('www.', '').replaceAll('m.', '');
+    if (cleanHost == cleanRule || cleanHost.endsWith('.$cleanRule')) {
+      return true;
+    }
+    final cleanRuleHyphen = cleanRule.replaceAll('.', '-');
+    if (fullUrl.toLowerCase().contains(cleanRule) ||
+        cleanHost.contains(cleanRuleHyphen)) {
+      return true;
     }
     return false;
   }
 
-  /// Block groups ke liye: host match ya poore URL mein (boundary ke saath) domain.
-  /// Isse netflix.com par "x.com" rule galat se nahi lagta.
-  bool _hostMatchesLoose(String host, String fullUrl, String ruleDomain) {
-    final rule = _cleanRuleDomain(ruleDomain);
-    if (rule.isEmpty) return false;
-    if (_hostMatchesStrict(host, rule)) return true;
-
-    var decoded = fullUrl.toLowerCase();
-    try {
-      decoded = Uri.decodeFull(decoded);
-    } catch (_) {}
-    final escaped = RegExp.escape(rule);
-    return RegExp('(^|[^a-z0-9-])$escaped(?![a-z0-9-])').hasMatch(decoded);
-  }
-
-  bool _evaluateUrl(
-    String url, {
-    bool showOverlayOnBlock = true,
-    bool fromNavRequest = false,
-    int depth = 0,
-  }) {
+  bool _evaluateUrl(String url, {bool showOverlayOnBlock = true}) {
     if (url == 'about:blank') return true;
     final uri = Uri.tryParse(url);
     if (uri == null) return true;
@@ -1093,63 +1109,27 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     final path = uri.path.toLowerCase();
     final featureEnforced = _featurePassHash.isEmpty || _isFeatureLockActive;
 
-    // Google Docs viewer: rules andar wale asli document URL par lagte hain
-    if (depth < 2 &&
-        host == 'docs.google.com' &&
-        (path == '/gview' || path == '/viewer' || path == '/viewerng/viewer')) {
-      String? inner;
-      try {
-        inner = uri.queryParameters['url'];
-      } catch (_) {
-        inner = null;
-      }
-      if (inner != null && inner.isNotEmpty) {
-        return _evaluateUrl(
-          inner,
-          showOverlayOnBlock: showOverlayOnBlock,
-          fromNavRequest: fromNavRequest,
-          depth: depth + 1,
-        );
-      }
-    }
-
-    // 1. Feature Locks (YouTube Shorts & Instagram Reels)
     if (featureEnforced) {
-      String? featureReason;
       if (_blockYtShorts &&
-          _hostIs(host, 'youtube.com') &&
+          host.contains('youtube.com') &&
           path.startsWith('/shorts')) {
-        featureReason = 'YouTube Shorts लॉक है — केवल स्टडी वीडियो अनुमत हैं';
-      } else if (_blockIgReels &&
-          _hostIs(host, 'instagram.com') &&
+        _showToast('YouTube Shorts लॉक है — केवल स्टडी वीडियो अनुमत हैं');
+        return false;
+      }
+      if (_blockIgReels &&
+          host.contains('instagram.com') &&
           (path.startsWith('/reels') ||
               path.startsWith('/reel/') ||
               path.startsWith('/explore'))) {
-        featureReason = 'Instagram Reels और Explore लॉक है';
-      }
-      if (featureReason != null) {
-        final String reason = featureReason;
-        if (fromNavRequest) {
-          // Link tap: page wahi rehta hai, sirf message
-          _showToast(reason);
-        } else if (showOverlayOnBlock && mounted) {
-          // Seedha load / URL change: overlay dikhao (toast ka loop nahi)
-          setState(() {
-            _isPageBlocked = true;
-            _blockedUrl = url;
-            _blockedReason = reason;
-            _blockingGroup = null;
-          });
-        }
+        _showToast('Instagram Reels और Explore लॉक है');
         return false;
       }
     }
 
-    // 2. Custom Lock Groups Check
     for (final group in _lockGroups) {
       if (group.isCurrentlyActive) {
         for (final domain in group.domains) {
-          if (_hostMatchesLoose(host, url, domain)) {
+          if (_domainMatches(host, url, domain)) {
             if (showOverlayOnBlock && mounted) {
               setState(() {
                 _isPageBlocked = true;
@@ -1164,11 +1144,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       }
     }
 
-    // 3. Exam Whitelist Mode Check (sirf asli host match, URL ke andar ka text nahi)
     if (_whitelistMode && featureEnforced) {
       bool allowed = false;
       for (final wDomain in _whitelistedDomains) {
-        if (_hostMatchesStrict(host, wDomain)) {
+        if (_domainMatches(host, url, wDomain)) {
           allowed = true;
           break;
         }
@@ -1192,10 +1171,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     return true;
   }
 
-  String _normalizeUrlForMode(String rawUrl, {bool? desktop}) {
-    final bool isDesktop = desktop ?? _isDesktopMode;
+  String _normalizeUrlForMode(String rawUrl) {
     var target = rawUrl;
-    if (isDesktop) {
+    if (_isDesktopMode) {
       if (target.contains('://m.youtube.com')) {
         target = target.replaceFirst('://m.youtube.com', '://www.youtube.com');
         if (!target.contains('app=desktop')) {
@@ -1214,11 +1192,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     return target;
   }
 
-  void _loadFromSearchBar(String input, {BrowserTab? inTab}) {
+  void _loadFromSearchBar(String input) {
     final trimmed = input.trim();
     if (trimmed.isEmpty) return;
-    final tab = inTab ?? _activeTab;
-    final bool active = _isActiveTab(tab);
 
     String targetUrl;
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
@@ -1226,71 +1202,57 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     } else if (trimmed.contains('.') && !trimmed.contains(' ')) {
       targetUrl = 'https://$trimmed';
     } else {
-      targetUrl =
-          'https://www.google.com/search?q=${Uri.encodeComponent(trimmed)}';
+      targetUrl = '$_searchEngineUrl${Uri.encodeComponent(trimmed)}';
     }
 
-    // Kharab URL par crash nahi: seedha Google search
-    final parsed = Uri.tryParse(targetUrl);
-    if (parsed == null || parsed.host.isEmpty) {
-      targetUrl =
-          'https://www.google.com/search?q=${Uri.encodeComponent(trimmed)}';
-    }
+    targetUrl = _normalizeUrlForMode(targetUrl);
 
-    targetUrl = _normalizeUrlForMode(targetUrl, desktop: tab.isDesktop);
+    setState(() {
+      _currentUrl = targetUrl;
+      _urlController.text = targetUrl;
+      _isReadingMode = false;
+      _syncActiveTab(url: targetUrl);
+    });
 
-    tab.url = targetUrl;
-    if (active) {
-      setState(() {
-        _currentUrl = targetUrl;
-        _urlController.text = targetUrl;
-        _isReadingMode = false;
-      });
-    }
-
-    // लिंक लोड करने से पहले Lock चेक करना (बाहरी और अंदरूनी दोनों लिंक्स के लिए)
-    final allowed = _evaluateUrl(targetUrl, showOverlayOnBlock: active);
+    final allowed = _evaluateUrl(targetUrl, showOverlayOnBlock: true);
     if (!allowed) {
-      tab.controller.loadRequest(Uri.parse('about:blank'));
+      _webController.loadRequest(Uri.parse('about:blank'));
       return;
     }
 
-    if (active) {
-      setState(() => _isPageBlocked = false);
-    }
-
-    // PDF / Office files: viewer mein; zip/apk: seedha download
-    if (_hasExt(targetUrl, _viewerExts)) {
-      _rememberDownload(targetUrl);
-      _openDocViewer(tab, targetUrl);
-      return;
-    }
-    if (_hasExt(targetUrl, _downloadExts)) {
-      _rememberDownload(targetUrl);
-      _startDownload(targetUrl);
-      return;
-    }
-
-    tab.controller.loadRequest(Uri.parse(targetUrl));
+    setState(() => _isPageBlocked = false);
+    _applyNativeDesktopViewport(_isDesktopMode);
+    _webController.loadRequest(Uri.parse(targetUrl));
   }
 
   Future<void> _toggleDesktopMode() async {
-    final tab = _activeTab;
-    setState(() => tab.isDesktop = !tab.isDesktop);
-    await _applyUserAgent(tab);
-    await _configureNativeWebView(tab);
-    try {
-      // Purana mobile page cache se na aaye
-      await tab.controller.clearCache();
-    } catch (_) {}
-    _showToast(tab.isDesktop
-        ? 'Desktop site मोड चालू किया गया'
-        : 'Mobile site मोड चालू किया गया');
-    var reloadUrl = _currentUrl;
-    if (reloadUrl.isEmpty || reloadUrl.startsWith('about:')) {
-      reloadUrl = 'https://www.google.com';
-    }
-    _loadFromSearchBar(_normalizeUrlForMode(reloadUrl, desktop: tab.isDesktop));
+    setState(() {
+      _isDesktopMode = !_isDesktopMode;
+      _syncActiveTab();
+    });
+    await _applyNativeDesktopViewport(_isDesktopMode);
+    final updatedUrl = _normalizeUrlForMode(_currentUrl);
+    _showToast(_isDesktopMode
+        ? 'Desktop site चालू किया गया'
+        : 'Mobile site चालू किया गया');
+    _loadFromSearchBar(updatedUrl);
+  }
+
+  void _openZoomControlsWithAutoHide() {
+    setState(() {
+      _showZoomBar = true;
+      _showFindBar = false;
+    });
+    _scheduleZoomAutoHide();
+  }
+
+  void _scheduleZoomAutoHide() {
+    _zoomAutoHideTimer?.cancel();
+    _zoomAutoHideTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted && _showZoomBar) {
+        setState(() => _showZoomBar = false);
+      }
+    });
   }
 
   Future<void> _toggleReadingMode() async {
@@ -1301,31 +1263,15 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           if (document.getElementById('sb-reader-overlay')) return;
           var title = document.title || '';
           var paragraphs = Array.from(document.querySelectorAll('article p, main p, p'))
-            .map(function(p) { return (p.innerText || '').trim(); })
+            .map(function(p) { return p.innerText.trim(); })
             .filter(function(t) { return t.length > 40; });
+          var contentHtml = paragraphs.length > 0
+            ? paragraphs.map(function(p) { return '<p style="margin-bottom:16px;line-height:1.75;font-size:18px;color:#E2E8F0;">' + p + '</p>'; }).join('')
+            : '<p style="color:#94A3B8;">इस पेज पर रीडिंग मोड के लिए लंबा टेक्स्ट उपलब्ध नहीं है।</p>';
           var overlay = document.createElement('div');
           overlay.id = 'sb-reader-overlay';
           overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#0F141C;color:#F8FAFC;overflow-y:auto;padding:24px 20px 80px 20px;font-family:sans-serif;';
-          var wrap = document.createElement('div');
-          wrap.style.cssText = 'max-width:680px;margin:0 auto;';
-          var h1 = document.createElement('h1');
-          h1.style.cssText = 'font-size:24px;line-height:1.4;margin-bottom:20px;color:#A8C7FA;border-bottom:1px solid #262F40;padding-bottom:12px;';
-          h1.textContent = title;
-          wrap.appendChild(h1);
-          if (paragraphs.length > 0) {
-            paragraphs.forEach(function(t) {
-              var p = document.createElement('p');
-              p.style.cssText = 'margin-bottom:16px;line-height:1.75;font-size:18px;color:#E2E8F0;';
-              p.textContent = t;
-              wrap.appendChild(p);
-            });
-          } else {
-            var msg = document.createElement('p');
-            msg.style.cssText = 'color:#94A3B8;';
-            msg.textContent = 'इस पेज पर रीडिंग मोड के लिए लंबा टेक्स्ट उपलब्ध नहीं है।';
-            wrap.appendChild(msg);
-          }
-          overlay.appendChild(wrap);
+          overlay.innerHTML = '<div style="max-width:680px;margin:0 auto;"><h1 style="font-size:24px;line-height:1.4;margin-bottom:20px;color:#A8C7FA;border-bottom:1px solid #262F40;padding-bottom:12px;">' + title + '</h1>' + contentHtml + '</div>';
           document.body.appendChild(overlay);
         })();
       ''');
@@ -1349,41 +1295,27 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
 
   Future<void> _performFindInPage(String query) async {
     if (query.trim().isEmpty) return;
-    await _webController.runJavaScript('window.find(${jsonEncode(query)});');
+    final safeQuery = query.replaceAll("'", "\\'");
+    await _webController.runJavaScript("window.find('$safeQuery');");
   }
 
-  void _createNewTab({bool incognito = false, String? url}) {
-    if (_tabs.length >= _maxTabs) {
-      if (url != null) {
-        _loadFromSearchBar(url);
-      } else {
-        _showToast('अधिकतम $_maxTabs टैब खुले रह सकते हैं — पहले कोई टैब बंद करें');
-      }
-      return;
-    }
-    final target = url ?? 'https://www.google.com';
-    final newTab = _newTab(incognito: incognito);
+  void _createNewTab({bool incognito = false, String? url, String? groupId}) {
+    final target = url ?? _homepageUrl;
+    final newTab = BrowserTab(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      title: incognito ? 'Incognito Tab' : 'New Tab',
+      url: target,
+      isIncognito: incognito,
+      isDesktop: _isDesktopMode,
+      groupId: groupId,
+    );
     setState(() {
       _tabs.add(newTab);
       _activeTabIndex = _tabs.length - 1;
-      _isPageBlocked = false;
-      _isReadingMode = false;
-      _currentUrl = target;
-      _pageTitle = newTab.title;
-      _loadingProgress = 0;
-      _urlController.text = target;
+      _isIncognito = incognito;
     });
-    _prepareAndLoadNewTab(newTab, target);
-    _showToast(incognito
-        ? 'New Private tab: history सेव नहीं होगी (Focus Locks सक्रिय हैं)'
-        : 'New tab खोला गया');
-  }
-
-  Future<void> _prepareAndLoadNewTab(BrowserTab tab, String target) async {
-    await _applyUserAgent(tab);
-    await _configureNativeWebView(tab);
-    if (!mounted || !_tabs.contains(tab)) return;
-    _loadFromSearchBar(target, inTab: tab);
+    _saveData();
+    _loadFromSearchBar(target);
   }
 
   void _switchToTab(int index) {
@@ -1391,46 +1323,45 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     final tab = _tabs[index];
     setState(() {
       _activeTabIndex = index;
-      _currentUrl = tab.url;
-      _pageTitle = tab.title;
-      _loadingProgress = tab.progress;
-      _isPageBlocked = false;
-      _isReadingMode = false;
-      _urlController.text = tab.url;
+      _isIncognito = tab.isIncognito;
+      _isDesktopMode = tab.isDesktop;
     });
-    // Page reload nahi hota. Sirf Lock rules dobara check hote hain.
-    if (tab.url.isNotEmpty && tab.url != 'about:blank') {
-      final allowed = _evaluateUrl(tab.url, showOverlayOnBlock: true);
-      if (!allowed) {
-        tab.controller.loadRequest(Uri.parse('about:blank'));
-      }
-    }
-    _injectFocusScripts(tab);
+    _saveData();
+    _applyNativeDesktopViewport(_isDesktopMode);
+    _loadFromSearchBar(tab.url);
   }
 
   void _closeTab(int index) {
     if (index < 0 || index >= _tabs.length) return;
+    final removedTab = _tabs[index];
+    if (!removedTab.isIncognito) {
+      _recentlyClosedTabs.insert(0, removedTab);
+      if (_recentlyClosedTabs.length > 30) {
+        _recentlyClosedTabs.removeLast();
+      }
+    }
     if (_tabs.length <= 1) {
-      _loadFromSearchBar('https://www.google.com');
+      setState(() {
+        _tabs[0] = BrowserTab(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          title: 'New Tab',
+          url: _homepageUrl,
+        );
+        _activeTabIndex = 0;
+        _isIncognito = false;
+      });
+      _saveData();
+      _loadFromSearchBar(_homepageUrl);
       return;
     }
-    final closing = _tabs[index];
-    final wasActive = index == _activeTabIndex;
-    try {
-      // Band hone wale tab ki video/audio ruk jaye
-      closing.controller.loadRequest(Uri.parse('about:blank'));
-    } catch (_) {}
     setState(() {
       _tabs.removeAt(index);
-      if (index < _activeTabIndex) {
-        _activeTabIndex--;
-      } else if (_activeTabIndex >= _tabs.length) {
+      if (_activeTabIndex >= _tabs.length) {
         _activeTabIndex = _tabs.length - 1;
       }
     });
-    if (wasActive) {
-      _switchToTab(_activeTabIndex);
-    }
+    _saveData();
+    _switchToTab(_activeTabIndex);
   }
 
   bool get _isCurrentPageBookmarked =>
@@ -1453,7 +1384,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     await _saveData();
   }
 
-  void _showToast(String msg, {String? actionLabel, VoidCallback? onAction}) {
+  void _showToast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1465,20 +1396,13 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         backgroundColor: const Color(0xFF1E232E),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        duration: Duration(seconds: actionLabel != null ? 4 : 2),
-        action: (actionLabel != null && onAction != null)
-            ? SnackBarAction(
-                label: actionLabel,
-                textColor: const Color(0xFFA8C7FA),
-                onPressed: onAction,
-              )
-            : null,
+        duration: const Duration(seconds: 2),
       ),
     );
   }
 
   // ===========================================================================
-  // CHROME-STYLE 3-DOT POPUP MENU (Screenshots 2 & 3 Layout)
+  // CHROME-STYLE 3-DOT POPUP MENU
   // ===========================================================================
   void _openChromeStyleMenu() {
     showGeneralDialog(
@@ -1486,7 +1410,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       barrierDismissible: true,
       barrierLabel: 'Browser Menu',
       barrierColor: Colors.black54,
-      transitionDuration: const Duration(milliseconds: 160),
+      transitionDuration: const Duration(milliseconds: 150),
       pageBuilder: (ctx, anim1, anim2) {
         return SafeArea(
           child: Align(
@@ -1495,17 +1419,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
               padding: const EdgeInsets.only(top: 52, right: 10),
               child: Material(
                 color: const Color(0xFF1E232E),
-                elevation: 14,
+                elevation: 16,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(18),
                   side: const BorderSide(color: Color(0xFF2E3646), width: 1),
                 ),
-                              child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    minWidth: 285,
-                    maxWidth: 285,
-                    maxHeight: MediaQuery.of(context).size.height * 0.82,
-                  ),
+                child: SizedBox(
+                  width: 286,
+                  height: MediaQuery.of(context).size.height * 0.84,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -1556,15 +1477,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                             ),
                             _buildTopMenuIconButton(
                               icon: Icons.download_outlined,
-                              tooltip: 'Save Page Link',
+                              tooltip: 'Download offline page',
                               onTap: () {
                                 Navigator.pop(ctx);
-                                if (!_downloads.contains(_currentUrl)) {
-                                  setState(
-                                      () => _downloads.insert(0, _currentUrl));
-                                  _saveData();
-                                }
-                                _showToast('पेज Downloads में जोड़ा गया');
+                                _downloadCurrentPageOffline();
                               },
                             ),
                             _buildTopMenuIconButton(
@@ -1579,11 +1495,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         ),
                       ),
 
-                      // SCROLLABLE MENU ITEMS
-                      Flexible(
+                      // FULL CHROME MENU ITEMS LIST
+                      Expanded(
                         child: ListView(
                           padding: const EdgeInsets.symmetric(vertical: 6),
-                          shrinkWrap: true,
                           children: [
                             _buildChromeMenuItem(
                               icon: Icons.add_box_outlined,
@@ -1595,18 +1510,18 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                             ),
                             _buildChromeMenuItem(
                               icon: Icons.visibility_off_outlined,
-                              title: 'New Private tab',
+                              title: 'New Incognito tab',
                               onTap: () {
                                 Navigator.pop(ctx);
                                 _createNewTab(incognito: true);
                               },
                             ),
                             _buildChromeMenuItem(
-                              icon: Icons.layers_outlined,
-                              title: 'Recent tabs (${_tabs.length})',
+                              icon: Icons.grid_view_outlined,
+                              title: 'Add tab to new group',
                               onTap: () {
                                 Navigator.pop(ctx);
-                                _openTabsSwitcherSheet();
+                                _promptCreateTabGroupForCurrentTab();
                               },
                             ),
                             const Divider(height: 12),
@@ -1615,7 +1530,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               title: 'History',
                               onTap: () {
                                 Navigator.pop(ctx);
-                                _openHistorySheet();
+                                _openFullScreenHistoryPage();
                               },
                             ),
                             _buildChromeMenuItem(
@@ -1623,7 +1538,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               title: 'Delete browsing data',
                               onTap: () {
                                 Navigator.pop(ctx);
-                                _confirmClearBrowsingData();
+                                _openDeleteBrowsingDataDialog();
                               },
                             ),
                             _buildChromeMenuItem(
@@ -1640,37 +1555,85 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               title: 'Downloads',
                               onTap: () {
                                 Navigator.pop(ctx);
-                                _openDownloadsSheet();
+                                _openFullScreenDownloadsPage();
                               },
                             ),
                             _buildChromeMenuItem(
-                              icon: Icons.bookmarks_outlined,
+                              icon: Icons.star_border,
                               title: 'Bookmarks',
                               onTap: () {
                                 Navigator.pop(ctx);
-                                _openBookmarksSheet();
+                                _openFullScreenBookmarksPage();
                               },
                             ),
+                            _buildChromeMenuItem(
+                              icon: Icons.devices_outlined,
+                              title: 'Recent tabs',
+                              onTap: () {
+                                Navigator.pop(ctx);
+                                _openFullScreenRecentTabsPage();
+                              },
+                            ),
+                            const Divider(height: 12),
                             _buildChromeMenuItem(
                               icon: Icons.zoom_in,
-                              title: 'Zoom ($_zoomPercent%)',
+                              title: 'Zoom',
                               onTap: () {
                                 Navigator.pop(ctx);
-                                setState(() {
-                                  _showZoomBar = true;
-                                  _showFindBar = false;
-                                });
+                                _openZoomControlsWithAutoHide();
                               },
                             ),
-                            _buildChromeMenuItem(
-                              icon: Icons.share_outlined,
-                              title: 'Share...',
+                            // SHARE ROW WITH DIRECT TELEGRAM QUICK ICON
+                            InkWell(
                               onTap: () {
                                 Navigator.pop(ctx);
-                                Clipboard.setData(
-                                    ClipboardData(text: _currentUrl));
-                                _showToast('लिंक क्लिपबोर्ड पर कॉपी हो गया');
+                                _openChromeShareSheet();
                               },
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 10),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.share_outlined,
+                                        size: 21, color: Color(0xFFE2E8F0)),
+                                    const SizedBox(width: 16),
+                                    const Expanded(
+                                      child: Text(
+                                        'Share...',
+                                        style: TextStyle(
+                                          fontSize: 15,
+                                          color: Color(0xFFE2E8F0),
+                                        ),
+                                      ),
+                                    ),
+                                    InkWell(
+                                      onTap: () {
+                                        Navigator.pop(ctx);
+                                        _intentChannel
+                                            .invokeMethod('shareLink', {
+                                          'url': _currentUrl,
+                                          'title': _pageTitle,
+                                          'package': 'org.telegram.messenger',
+                                        });
+                                      },
+                                      borderRadius: BorderRadius.circular(14),
+                                      child: Container(
+                                        width: 28,
+                                        height: 28,
+                                        decoration: const BoxDecoration(
+                                          color: Color(0xFF2AABEE),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const Icon(
+                                          Icons.send,
+                                          size: 15,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
                             _buildChromeMenuItem(
                               icon: Icons.find_in_page_outlined,
@@ -1684,7 +1647,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildChromeMenuItem(
-                              icon: Icons.translate,
+                              icon: Icons.g_translate,
                               title: 'Translate...',
                               onTap: () {
                                 Navigator.pop(ctx);
@@ -1692,13 +1655,21 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildChromeMenuItem(
-                              icon: Icons.menu_book_outlined,
+                              icon: Icons.chrome_reader_mode_outlined,
                               title: _isReadingMode
                                   ? 'Hide Reading mode'
                                   : 'Show Reading mode',
                               onTap: () {
                                 Navigator.pop(ctx);
                                 _toggleReadingMode();
+                              },
+                            ),
+                            _buildChromeMenuItem(
+                              icon: Icons.add_to_home_screen,
+                              title: 'Install and create shortcut',
+                              onTap: () {
+                                Navigator.pop(ctx);
+                                _openInstallAndCreateShortcutSheet();
                               },
                             ),
                             // DESKTOP SITE WITH CHECKBOX
@@ -1749,6 +1720,22 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               onTap: () {
                                 Navigator.pop(ctx);
                                 _openLockManagerSheet();
+                              },
+                            ),
+                            _buildChromeMenuItem(
+                              icon: Icons.settings_outlined,
+                              title: 'Settings',
+                              onTap: () {
+                                Navigator.pop(ctx);
+                                _openFullScreenSettingsPage();
+                              },
+                            ),
+                            _buildChromeMenuItem(
+                              icon: Icons.help_outline,
+                              title: 'Help and feedback',
+                              onTap: () {
+                                Navigator.pop(ctx);
+                                _openFullScreenHelpPage();
                               },
                             ),
                           ],
@@ -1816,307 +1803,119 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   // ===========================================================================
-  // TABS, HISTORY, DOWNLOADS, SITE CONTROLS & CLEAR DATA SHEETS
+  // INSTALL AND CREATE SHORTCUT (Video 2: 01:34 - 01:59)
   // ===========================================================================
-  void _openTabsSwitcherSheet() {
+  void _openInstallAndCreateShortcutSheet() {
+    final defaultTitle = _pageTitle.isNotEmpty
+        ? _pageTitle
+        : (Uri.tryParse(_currentUrl)?.host ?? 'Study Shortcut');
+
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF1A1F29),
+      backgroundColor: const Color(0xFF1E232E),
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setTabSheet) => Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Open Tabs (${_tabs.length})',
-                    style: const TextStyle(
-                        fontSize: 17, fontWeight: FontWeight.w600),
-                  ),
-                  Row(
-                    children: [
-                      TextButton.icon(
-                        icon: const Icon(Icons.visibility_off_outlined,
-                            size: 17),
-                        label: const Text('Private'),
-                        onPressed: () {
-                          Navigator.pop(ctx);
-                          _createNewTab(incognito: true);
-                        },
-                      ),
-                      const SizedBox(width: 6),
-                      FilledButton.tonalIcon(
-                        icon: const Icon(Icons.add, size: 18),
-                        label: const Text('New Tab'),
-                        onPressed: () {
-                          Navigator.pop(ctx);
-                          _createNewTab(incognito: false);
-                        },
-                      ),
-                    ],
-                  ),
-                ],
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Install and create shortcut',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF141821),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFF2D3343)),
               ),
-              const Divider(height: 20),
-              Flexible(
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: _tabs.length,
-                  itemBuilder: (_, i) {
-                    final tab = _tabs[i];
-                    final isSelected = i == _activeTabIndex;
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      decoration: BoxDecoration(
-                        color: isSelected
-                            ? const Color(0xFF263147)
-                            : const Color(0xFF12151C),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: isSelected
-                              ? const Color(0xFFA8C7FA)
-                              : const Color(0xFF2D3343),
-                        ),
-                      ),
-                      child: ListTile(
-                        leading: Icon(
-                          tab.isIncognito
-                              ? Icons.visibility_off_outlined
-                              : Icons.public,
-                          color: tab.isIncognito
-                              ? const Color(0xFFC4B5FD)
-                              : const Color(0xFFA8C7FA),
-                        ),
-                        title: Text(
-                          tab.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w500),
-                        ),
-                        subtitle: Text(
-                          tab.url,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.white60),
-                        ),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.close, size: 18),
-                          onPressed: () {
-                            _closeTab(i);
-                            setTabSheet(() {});
-                            if (_tabs.length == 1) Navigator.pop(ctx);
-                          },
-                        ),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          _switchToTab(i);
-                        },
-                      ),
-                    );
-                  },
+              child: ListTile(
+                leading: Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF263147),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.apps, color: Color(0xFFA8C7FA)),
                 ),
+                title: const Text('Install page as app',
+                    style: TextStyle(fontWeight: FontWeight.w500)),
+                subtitle: Text(defaultTitle,
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _promptConfirmPinShortcut(defaultTitle);
+                },
               ),
-            ],
-          ),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF141821),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFF2D3343)),
+              ),
+              child: ListTile(
+                leading: Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF263147),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.add_to_home_screen,
+                      color: Color(0xFFA8C7FA)),
+                ),
+                title: const Text('Create shortcut',
+                    style: TextStyle(fontWeight: FontWeight.w500)),
+                subtitle: const Text('Shortcuts open in Study Browser'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _promptConfirmPinShortcut(defaultTitle);
+                },
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  void _openHistorySheet() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1A1F29),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setHistState) => Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Browsing History',
-                    style:
-                        TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
-                  ),
-                  if (_history.isNotEmpty)
-                    TextButton.icon(
-                      icon: const Icon(Icons.delete_outline, size: 18),
-                      label: const Text('Clear All'),
-                      onPressed: () async {
-                        setState(() => _history.clear());
-                        setHistState(() {});
-                        await _saveData();
-                      },
-                    ),
-                ],
-              ),
-              const Divider(height: 18),
-              if (_history.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 32),
-                  child: Text(
-                    'अभी कोई ब्राउज़िंग हिस्ट्री नहीं है',
-                    style: TextStyle(color: Colors.white54),
-                  ),
-                )
-              else
-                Flexible(
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: _history.length,
-                    itemBuilder: (_, i) {
-                      final item = _history[i];
-                      return ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: const Icon(Icons.history,
-                            size: 20, color: Color(0xFFA8C7FA)),
-                        title: Text(
-                          item.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          '${item.timestamp} • ${item.url}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.white54),
-                        ),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          _loadFromSearchBar(item.url);
-                        },
-                      );
-                    },
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _openDownloadsSheet() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1A1F29),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlState) => Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Saved & Downloaded Links',
-                    style:
-                        TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
-                  ),
-                  if (_downloads.isNotEmpty)
-                    TextButton(
-                      onPressed: () async {
-                        setState(() => _downloads.clear());
-                        setDlState(() {});
-                        await _saveData();
-                      },
-                      child: const Text('Clear'),
-                    ),
-                ],
-              ),
-              const Divider(height: 18),
-              if (_downloads.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 32),
-                  child: Text(
-                    'कोई सेव किया गया लिंक या फ़ाइल नहीं है',
-                    style: TextStyle(color: Colors.white54),
-                  ),
-                )
-              else
-                Flexible(
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: _downloads.length,
-                    itemBuilder: (_, i) {
-                      final link = _downloads[i];
-                      return ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: const Icon(Icons.insert_drive_file_outlined,
-                            color: Color(0xFFA8C7FA)),
-                        title: Text(
-                          link.split('/').last.isEmpty
-                              ? link
-                              : link.split('/').last,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          link,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.white54),
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.download_rounded, size: 20),
-                              tooltip: 'Download',
-                              onPressed: () => _startDownload(link),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.copy, size: 18),
-                              onPressed: () {
-                                Clipboard.setData(ClipboardData(text: link));
-                                _showToast('लिंक कॉपी किया गया');
-                              },
-                            ),
-                          ],
-                        ),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          _loadFromSearchBar(link);
-                        },
-                      );
-                    },
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _confirmClearBrowsingData() async {
-    await showDialog(
+  void _promptConfirmPinShortcut(String initialTitle) {
+    final nameCtrl = TextEditingController(text: initialTitle);
+    showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1E232E),
-        title: const Text('Delete browsing data?'),
-        content: const Text(
-          'इससे ब्राउज़िंग हिस्ट्री, कैश और लोकल स्टोरेज साफ़ हो जाएगा।\n\n(आपके बनाए हुए Focus Locks और Passwords सुरक्षित रहेंगे)',
-          style: TextStyle(fontSize: 13.5, color: Colors.white70),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Add to Home screen'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Touch and hold the icon or tap Add to place it on your Home screen:',
+              style: TextStyle(fontSize: 13, color: Colors.white70),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: nameCtrl,
+              decoration: InputDecoration(
+                labelText: 'Shortcut Title',
+                filled: true,
+                fillColor: const Color(0xFF12151C),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -2126,15 +1925,1984 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           FilledButton(
             onPressed: () async {
               Navigator.pop(ctx);
-              setState(() => _history.clear());
-              await _saveData();
-              await _webController.clearCache();
-              await _webController.clearLocalStorage();
-              _showToast('Browsing data साफ़ कर दिया गया');
+              await _intentChannel.invokeMethod('createHomeShortcut', {
+                'title': nameCtrl.text.trim(),
+                'url': _currentUrl,
+              });
             },
-            child: const Text('Delete data'),
+            child: const Text('Add'),
           ),
         ],
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // CHROME-STYLE SHARE SHEET (Video 2: 01:07 - 01:28)
+  // ===========================================================================
+  void _openChromeShareSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E232E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel'),
+                ),
+                const Text(
+                  'Share link',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(width: 48),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // Link Preview Box with Copy Button
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF141821),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFF2D3343)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF263147),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.public, color: Color(0xFFA8C7FA)),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _pageTitle.isNotEmpty ? _pageTitle : 'Web Page',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w600, fontSize: 14),
+                        ),
+                        Text(
+                          _currentUrl,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: Color(0xFFA8C7FA), fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.copy, size: 20),
+                    tooltip: 'Copy link',
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: _currentUrl));
+                      Navigator.pop(ctx);
+                      _showToast('लिंक कॉपी कर लिया गया');
+                    },
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            // Action Chips Row (Print, Send to device, QR Code, Save Offline)
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  ActionChip(
+                    avatar: const Icon(Icons.print_outlined, size: 17),
+                    label: const Text('Print'),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _intentChannel.invokeMethod('printPage', {
+                        'title': _pageTitle,
+                      });
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  ActionChip(
+                    avatar: const Icon(Icons.qr_code, size: 17),
+                    label: const Text('QR Code'),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _showQrCodeDialog();
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  ActionChip(
+                    avatar: const Icon(Icons.download_outlined, size: 17),
+                    label: const Text('Save Offline'),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _downloadCurrentPageOffline();
+                    },
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
+            // Direct App Share Row
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildShareAppCircle(
+                  label: 'WhatsApp',
+                  icon: Icons.chat_bubble_outline,
+                  color: const Color(0xFF25D366),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _intentChannel.invokeMethod('shareLink', {
+                      'url': _currentUrl,
+                      'title': _pageTitle,
+                      'package': 'com.whatsapp',
+                    });
+                  },
+                ),
+                _buildShareAppCircle(
+                  label: 'Telegram',
+                  icon: Icons.send,
+                  color: const Color(0xFF2AABEE),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _intentChannel.invokeMethod('shareLink', {
+                      'url': _currentUrl,
+                      'title': _pageTitle,
+                      'package': 'org.telegram.messenger',
+                    });
+                  },
+                ),
+                _buildShareAppCircle(
+                  label: 'Copy Link',
+                  icon: Icons.link,
+                  color: const Color(0xFF64748B),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    Clipboard.setData(ClipboardData(text: _currentUrl));
+                    _showToast('लिंक कॉपी हो गया');
+                  },
+                ),
+                _buildShareAppCircle(
+                  label: 'More Apps',
+                  icon: Icons.more_horiz,
+                  color: const Color(0xFF3B82F6),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _intentChannel.invokeMethod('shareLink', {
+                      'url': _currentUrl,
+                      'title': _pageTitle,
+                    });
+                  },
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildShareAppCircle({
+    required String label,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: Colors.white, size: 22),
+          ),
+          const SizedBox(height: 6),
+          Text(label, style: const TextStyle(fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
+  void _showQrCodeDialog() {
+    final qrImageUrl =
+        'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${Uri.encodeComponent(_currentUrl)}';
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E232E),
+        title: const Text('Scan QR Code'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Image.network(
+                qrImageUrl,
+                width: 200,
+                height: 200,
+                errorBuilder: (_, __, ___) => const SizedBox(
+                  width: 200,
+                  height: 200,
+                  child: Center(
+                    child: Text('QR Preview requires internet',
+                        style: TextStyle(color: Colors.black)),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              _currentUrl,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12, color: Colors.white70),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // FULL-SCREEN CHROME GRID TAB SWITCHER & TAB GROUPS (Video 1: 01:51 - 02:24)
+  // ===========================================================================
+  void _openFullScreenTabSwitcher() {
+    String searchQuery = '';
+    bool showIncognitoOnly = _isIncognito;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (pageCtx) => StatefulBuilder(
+          builder: (pageCtx, setGridState) {
+            final filteredTabs = _tabs.where((t) {
+              if (t.isIncognito != showIncognitoOnly) return false;
+              if (searchQuery.trim().isNotEmpty) {
+                final q = searchQuery.toLowerCase();
+                return t.title.toLowerCase().contains(q) ||
+                    t.url.toLowerCase().contains(q);
+              }
+              return true;
+            }).toList();
+
+            // Separate ungrouped tabs and tab groups
+            final ungroupedTabs = filteredTabs
+                .where((t) =>
+                    t.groupId == null ||
+                    !_tabGroups.any((g) => g.id == t.groupId))
+                .toList();
+
+            return Scaffold(
+              backgroundColor: const Color(0xFF12151C),
+              appBar: AppBar(
+                backgroundColor: const Color(0xFF12151C),
+                elevation: 0,
+                automaticallyImplyLeading: false,
+                titleSpacing: 12,
+                title: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    // Blue + New Tab Button (Chrome Left)
+                    InkWell(
+                      onTap: () {
+                        Navigator.pop(pageCtx);
+                        _createNewTab(incognito: showIncognitoOnly);
+                      },
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF3B82F6),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.add, color: Colors.white),
+                      ),
+                    ),
+
+                    // Center Segmented Switcher ([ count ] | [ Incognito ])
+                    Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1E232E),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFF2D3343)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          InkWell(
+                            onTap: () =>
+                                setGridState(() => showIncognitoOnly = false),
+                            borderRadius: BorderRadius.circular(10),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: !showIncognitoOnly
+                                    ? const Color(0xFF2E384D)
+                                    : Colors.transparent,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(
+                                '${_tabs.where((t) => !t.isIncognito).length}',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold, fontSize: 14),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          InkWell(
+                            onTap: () =>
+                                setGridState(() => showIncognitoOnly = true),
+                            borderRadius: BorderRadius.circular(10),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: showIncognitoOnly
+                                    ? const Color(0xFF2E384D)
+                                    : Colors.transparent,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: const Icon(Icons.visibility_off_outlined,
+                                  size: 18),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // Right 3-Dot Menu in Tab Switcher
+                    PopupMenuButton<String>(
+                      color: const Color(0xFF1E232E),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
+                      onSelected: (val) {
+                        if (val == 'new_tab') {
+                          Navigator.pop(pageCtx);
+                          _createNewTab(incognito: false);
+                        } else if (val == 'new_incognito') {
+                          Navigator.pop(pageCtx);
+                          _createNewTab(incognito: true);
+                        } else if (val == 'new_group') {
+                          _promptCreateNewTabGroupDialog(setGridState);
+                        } else if (val == 'close_all') {
+                          setState(() {
+                            _tabs = [
+                              BrowserTab(
+                                id: DateTime.now()
+                                    .millisecondsSinceEpoch
+                                    .toString(),
+                                title: 'New Tab',
+                                url: _homepageUrl,
+                              )
+                            ];
+                            _activeTabIndex = 0;
+                            _isIncognito = false;
+                          });
+                          _saveData();
+                          Navigator.pop(pageCtx);
+                          _loadFromSearchBar(_homepageUrl);
+                        } else if (val == 'clear_data') {
+                          Navigator.pop(pageCtx);
+                          _openDeleteBrowsingDataDialog();
+                        } else if (val == 'settings') {
+                          Navigator.pop(pageCtx);
+                          _openFullScreenSettingsPage();
+                        }
+                      },
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(
+                          value: 'new_tab',
+                          child: ListTile(
+                            dense: true,
+                            leading: Icon(Icons.add_box_outlined),
+                            title: Text('New tab'),
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'new_incognito',
+                          child: ListTile(
+                            dense: true,
+                            leading: Icon(Icons.visibility_off_outlined),
+                            title: Text('New Incognito tab'),
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'new_group',
+                          child: ListTile(
+                            dense: true,
+                            leading: Icon(Icons.grid_view_outlined),
+                            title: Text('New tab group'),
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'close_all',
+                          child: ListTile(
+                            dense: true,
+                            leading: Icon(Icons.close_fullscreen),
+                            title: Text('Close all tabs'),
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'clear_data',
+                          child: ListTile(
+                            dense: true,
+                            leading: Icon(Icons.delete_outline),
+                            title: Text('Delete browsing data'),
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'settings',
+                          child: ListTile(
+                            dense: true,
+                            leading: Icon(Icons.settings_outlined),
+                            title: Text('Settings'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              body: Column(
+                children: [
+                  // Search Your Tabs Bar
+                  Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    child: Container(
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1E232E),
+                        borderRadius: BorderRadius.circular(22),
+                      ),
+                      child: TextField(
+                        onChanged: (v) => setGridState(() => searchQuery = v),
+                        decoration: const InputDecoration(
+                          hintText: 'Search your tabs',
+                          prefixIcon: Icon(Icons.search, size: 20),
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.symmetric(vertical: 11),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // 2-COLUMN SYMMETRICAL CARD GRID (Tab Groups + Individual Tabs)
+                  Expanded(
+                    child: GridView.builder(
+                      padding: const EdgeInsets.all(12),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        mainAxisSpacing: 12,
+                        crossAxisSpacing: 12,
+                        childAspectRatio: 0.78,
+                      ),
+                      itemCount: (!showIncognitoOnly ? _tabGroups.length : 0) +
+                          ungroupedTabs.length,
+                      itemBuilder: (_, idx) {
+                        final groupCount =
+                            !showIncognitoOnly ? _tabGroups.length : 0;
+                        if (idx < groupCount) {
+                          final group = _tabGroups[idx];
+                          final groupTabs = _tabs
+                              .where((t) => t.groupId == group.id)
+                              .toList();
+                          return _buildTabGroupGridCard(
+                            group: group,
+                            groupTabs: groupTabs,
+                            pageCtx: pageCtx,
+                            setGridState: setGridState,
+                          );
+                        }
+                        final tab = ungroupedTabs[idx - groupCount];
+                        final realIndex = _tabs.indexOf(tab);
+                        return _buildSingleTabGridCard(
+                          tab: tab,
+                          realIndex: realIndex,
+                          pageCtx: pageCtx,
+                          setGridState: setGridState,
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSingleTabGridCard({
+    required BrowserTab tab,
+    required int realIndex,
+    required BuildContext pageCtx,
+    required StateSetter setGridState,
+  }) {
+    final isSelected = realIndex == _activeTabIndex;
+    final host = Uri.tryParse(tab.url)?.host.replaceAll('www.', '') ?? tab.url;
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.pop(pageCtx);
+        _switchToTab(realIndex);
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E232E),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isSelected
+                ? const Color(0xFFA8C7FA)
+                : const Color(0xFF2E3646),
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Column(
+          children: [
+            // Card Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 4, 6),
+              child: Row(
+                children: [
+                  Icon(
+                    tab.isIncognito ? Icons.visibility_off : Icons.public,
+                    size: 16,
+                    color: const Color(0xFFA8C7FA),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      tab.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 12.5, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  PopupMenuButton<String>(
+                    padding: EdgeInsets.zero,
+                    icon: const Icon(Icons.more_vert, size: 16),
+                    onSelected: (val) {
+                      if (val == 'group') {
+                        _promptMoveTabToGroup(tab, setGridState);
+                      } else if (val == 'share') {
+                        _intentChannel.invokeMethod('shareLink', {
+                          'url': tab.url,
+                          'title': tab.title,
+                        });
+                      }
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(
+                        value: 'group',
+                        child: Text('Add tab to group'),
+                      ),
+                      PopupMenuItem(
+                        value: 'share',
+                        child: Text('Share'),
+                      ),
+                    ],
+                  ),
+                  InkWell(
+                    onTap: () {
+                      _closeTab(realIndex);
+                      setGridState(() {});
+                    },
+                    child: const Padding(
+                      padding: EdgeInsets.all(4),
+                      child: Icon(Icons.close, size: 17),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Card Preview Body
+            Expanded(
+              child: Container(
+                width: double.infinity,
+                margin: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF12151C),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircleAvatar(
+                      radius: 20,
+                      backgroundColor: const Color(0xFF263147),
+                      child: Text(
+                        host.isNotEmpty ? host[0].toUpperCase() : 'W',
+                        style: const TextStyle(
+                            color: Color(0xFFA8C7FA),
+                            fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      tab.title,
+                      maxLines: 2,
+                      textAlign: TextAlign.center,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 12.5, fontWeight: FontWeight.w500),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      host,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 11, color: Colors.white54),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTabGroupGridCard({
+    required BrowserTabGroup group,
+    required List<BrowserTab> groupTabs,
+    required BuildContext pageCtx,
+    required StateSetter setGridState,
+  }) {
+    final grpColor = Color(group.colorValue);
+    return GestureDetector(
+      onTap: () =>
+          _openTabGroupDetailDialog(group, pageCtx, setGridState),
+      child: Container(
+        decoration: BoxDecoration(
+          color: grpColor.withOpacity(0.18),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: grpColor.withOpacity(0.7), width: 1.5),
+        ),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 6, 6),
+              child: Row(
+                children: [
+                  Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: grpColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '${group.title} (${groupTabs.length})',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 12.5, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  InkWell(
+                    onTap: () {
+                      setState(() {
+                        for (final t in groupTabs) {
+                          t.groupId = null;
+                        }
+                        _tabGroups.remove(group);
+                      });
+                      _saveData();
+                      setGridState(() {});
+                    },
+                    child: const Icon(Icons.close, size: 17),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: GridView.builder(
+                  physics: const NeverScrollableScrollPhysics(),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    mainAxisSpacing: 6,
+                    crossAxisSpacing: 6,
+                  ),
+                  itemCount: groupTabs.length.clamp(0, 4),
+                  itemBuilder: (_, i) {
+                    final t = groupTabs[i];
+                    return Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF12151C),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        t.title,
+                        maxLines: 2,
+                        textAlign: TextAlign.center,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 10),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openTabGroupDetailDialog(
+    BrowserTabGroup group,
+    BuildContext switcherCtx,
+    StateSetter setGridState,
+  ) {
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setGrpDialog) {
+          final groupTabs =
+              _tabs.where((t) => t.groupId == group.id).toList();
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1E232E),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            title: Row(
+              children: [
+                CircleAvatar(
+                    radius: 7, backgroundColor: Color(group.colorValue)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text('${group.title} (${groupTabs.length} tabs)',
+                      style: const TextStyle(fontSize: 16)),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.add),
+                  tooltip: 'Add tab to this group',
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    Navigator.pop(switcherCtx);
+                    _createNewTab(groupId: group.id);
+                  },
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: groupTabs.isEmpty
+                  ? const Text('इस ग्रुप में अभी कोई टैब नहीं है।')
+                  : ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: groupTabs.length,
+                      itemBuilder: (_, i) {
+                        final t = groupTabs[i];
+                        final rIdx = _tabs.indexOf(t);
+                        return ListTile(
+                          leading: const Icon(Icons.public,
+                              color: Color(0xFFA8C7FA)),
+                          title: Text(t.title,
+                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                          subtitle: Text(t.url,
+                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.close, size: 18),
+                            onPressed: () {
+                              setState(() => t.groupId = null);
+                              _saveData();
+                              setGrpDialog(() {});
+                              setGridState(() {});
+                            },
+                          ),
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            Navigator.pop(switcherCtx);
+                            _switchToTab(rIdx);
+                          },
+                        );
+                      },
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Done'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _promptCreateTabGroupForCurrentTab() {
+    _promptCreateNewTabGroupDialog(null, assignCurrentTab: true);
+  }
+
+  void _promptCreateNewTabGroupDialog(
+    StateSetter? setGridState, {
+    bool assignCurrentTab = false,
+  }) {
+    final titleCtrl = TextEditingController(text: '1 tab');
+    final List<int> palette = [
+      0xFF94A3B8,
+      0xFF3B82F6,
+      0xFFEF4444,
+      0xFFF59E0B,
+      0xFF10B981,
+      0xFFEC4899,
+      0xFFA855F7,
+      0xFF06B6D4,
+    ];
+    int selectedColor = palette[1];
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF1E232E),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          title: const Text('New tab group'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleCtrl,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: 'Title',
+                ),
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: palette.map((c) {
+                  final isSel = c == selectedColor;
+                  return GestureDetector(
+                    onTap: () => setDialogState(() => selectedColor = c),
+                    child: Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: Color(c),
+                        shape: BoxShape.circle,
+                        border: isSel
+                            ? Border.all(color: Colors.white, width: 3)
+                            : null,
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final newGrp = BrowserTabGroup(
+                  id: DateTime.now().millisecondsSinceEpoch.toString(),
+                  title: titleCtrl.text.trim().isEmpty
+                      ? 'Study Group'
+                      : titleCtrl.text.trim(),
+                  colorValue: selectedColor,
+                );
+                setState(() {
+                  _tabGroups.add(newGrp);
+                  if (assignCurrentTab &&
+                      _tabs.isNotEmpty &&
+                      _activeTabIndex < _tabs.length) {
+                    _tabs[_activeTabIndex].groupId = newGrp.id;
+                  }
+                });
+                _saveData();
+                if (setGridState != null) setGridState(() {});
+                Navigator.pop(ctx);
+                _showToast('Tab group "${newGrp.title}" बनाया गया');
+              },
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _promptMoveTabToGroup(BrowserTab tab, StateSetter setGridState) {
+    if (_tabGroups.isEmpty) {
+      _promptCreateNewTabGroupDialog(setGridState, assignCurrentTab: true);
+      return;
+    }
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E232E),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Add tab to group',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+            const Divider(),
+            ..._tabGroups.map((g) => ListTile(
+                  leading:
+                      CircleAvatar(radius: 8, backgroundColor: Color(g.colorValue)),
+                  title: Text(g.title),
+                  onTap: () {
+                    setState(() => tab.groupId = g.id);
+                    _saveData();
+                    setGridState(() {});
+                    Navigator.pop(ctx);
+                    _showToast('Tab added to ${g.title}');
+                  },
+                )),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // FULL-SCREEN CHROME DOWNLOADS PAGE (Video 1: 00:46 - 01:20)
+  // ===========================================================================
+  Future<void> _openFullScreenDownloadsPage() async {
+    String selectedFilter = 'All';
+    String searchQuery = '';
+    bool showSearch = false;
+    String storageLabel = 'Using 9.84 GB of 110.34 GB';
+    double storageRatio = 0.12;
+
+    try {
+      final stats = await _intentChannel.invokeMethod('getStorageStats');
+      if (stats is Map) {
+        storageLabel = (stats['label'] ?? storageLabel).toString();
+        storageRatio =
+            ((stats['ratio'] ?? 0.12) as num).toDouble().clamp(0.02, 0.98);
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (pageCtx) => StatefulBuilder(
+          builder: (pageCtx, setDlPage) {
+            final filters = ['All', 'Videos', 'Images', 'Pages', 'Other'];
+            final filteredList = _downloads.where((d) {
+              if (selectedFilter != 'All' && d.category != selectedFilter) {
+                return false;
+              }
+              if (searchQuery.trim().isNotEmpty) {
+                final q = searchQuery.toLowerCase();
+                return d.title.toLowerCase().contains(q) ||
+                    d.url.toLowerCase().contains(q);
+              }
+              return true;
+            }).toList();
+
+            return Scaffold(
+              backgroundColor: const Color(0xFF12151C),
+              appBar: AppBar(
+                backgroundColor: const Color(0xFF12151C),
+                automaticallyImplyLeading: false,
+                title: showSearch
+                    ? TextField(
+                        autofocus: true,
+                        onChanged: (v) => setDlPage(() => searchQuery = v),
+                        decoration: const InputDecoration(
+                          hintText: 'Search downloads...',
+                          border: InputBorder.none,
+                        ),
+                      )
+                    : const Text('Downloads',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.settings_outlined),
+                    onPressed: () {
+                      Navigator.pop(pageCtx);
+                      _openFullScreenSettingsPage();
+                    },
+                  ),
+                  IconButton(
+                    icon: Icon(showSearch ? Icons.search_off : Icons.search),
+                    onPressed: () => setDlPage(() {
+                      showSearch = !showSearch;
+                      if (!showSearch) searchQuery = '';
+                    }),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(pageCtx),
+                  ),
+                ],
+              ),
+              body: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Storage Usage Indicator
+                  Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          storageLabel,
+                          style: const TextStyle(
+                              fontSize: 12.5, color: Colors.white70),
+                        ),
+                        const SizedBox(height: 6),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: storageRatio,
+                            minHeight: 4,
+                            color: const Color(0xFF3B82F6),
+                            backgroundColor: const Color(0xFF283040),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Filter Chips Row (All, Videos, Images, Pages, Other)
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Row(
+                      children: filters.map((f) {
+                        final isSel = selectedFilter == f;
+                        IconData chipIcon = Icons.check;
+                        if (f == 'Videos') chipIcon = Icons.videocam_outlined;
+                        if (f == 'Images') chipIcon = Icons.image_outlined;
+                        if (f == 'Pages') chipIcon = Icons.public;
+                        if (f == 'Other') {
+                          chipIcon = Icons.insert_drive_file_outlined;
+                        }
+
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: FilterChip(
+                            selected: isSel,
+                            showCheckmark: false,
+                            avatar: Icon(chipIcon, size: 17),
+                            label: Text(f),
+                            selectedColor: const Color(0xFF263147),
+                            backgroundColor: const Color(0xFF1E232E),
+                            onSelected: (_) =>
+                                setDlPage(() => selectedFilter = f),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+
+                  const Divider(height: 8),
+
+                  Expanded(
+                    child: filteredList.isEmpty
+                        ? const Center(
+                            child: Text(
+                              'Downloads you save appear here',
+                              style: TextStyle(color: Colors.white54),
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 8),
+                            itemCount: filteredList.length,
+                            itemBuilder: (_, i) {
+                              final item = filteredList[i];
+                              final showHeader = i == 0 ||
+                                  filteredList[i - 1].dateLabel !=
+                                      item.dateLabel;
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (showHeader)
+                                    Padding(
+                                      padding: const EdgeInsets.only(
+                                          top: 12, bottom: 8),
+                                      child: Text(
+                                        item.dateLabel,
+                                        style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.white70,
+                                        ),
+                                      ),
+                                    ),
+                                  ListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    leading: CircleAvatar(
+                                      radius: 20,
+                                      backgroundColor:
+                                          const Color(0xFF1E232E),
+                                      child: Icon(
+                                        item.category == 'Pages'
+                                            ? Icons.public
+                                            : (item.category == 'Images'
+                                                ? Icons.image_outlined
+                                                : (item.category == 'Videos'
+                                                    ? Icons.videocam_outlined
+                                                    : Icons
+                                                        .insert_drive_file_outlined)),
+                                        color: const Color(0xFFA8C7FA),
+                                      ),
+                                    ),
+                                    title: Text(
+                                      item.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w500),
+                                    ),
+                                    subtitle: Text(
+                                      item.sizeLabel,
+                                      style: const TextStyle(
+                                          fontSize: 12, color: Colors.white60),
+                                    ),
+                                    onTap: () => _openDownloadEntry(item),
+                                    trailing: PopupMenuButton<String>(
+                                      color: const Color(0xFF1E232E),
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(14)),
+                                      onSelected: (val) async {
+                                        if (val == 'share') {
+                                          await _intentChannel
+                                              .invokeMethod('shareLink', {
+                                            'url': item.url.isNotEmpty
+                                                ? item.url
+                                                : item.filePath,
+                                            'title': item.title,
+                                          });
+                                        } else if (val == 'rename') {
+                                          _promptRenameDownloadItem(
+                                              item, setDlPage);
+                                        } else if (val == 'delete') {
+                                          await _intentChannel.invokeMethod(
+                                              'deleteFileOnDisk', {
+                                            'filePath': item.filePath,
+                                          });
+                                          setState(
+                                              () => _downloads.remove(item));
+                                          setDlPage(() {});
+                                          await _saveData();
+                                        }
+                                      },
+                                      itemBuilder: (_) => const [
+                                        PopupMenuItem(
+                                          value: 'share',
+                                          child: Text('Share'),
+                                        ),
+                                        PopupMenuItem(
+                                          value: 'rename',
+                                          child: Text('Rename'),
+                                        ),
+                                        PopupMenuItem(
+                                          value: 'delete',
+                                          child: Text('Delete'),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  void _promptRenameDownloadItem(
+      DownloadEntry item, StateSetter setDlPage) {
+    final ctrl = TextEditingController(text: item.title);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E232E),
+        title: const Text('Rename file'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final newName = ctrl.text.trim();
+              if (newName.isNotEmpty) {
+                final updatedPath = await _intentChannel
+                    .invokeMethod<String>('renameFileOnDisk', {
+                  'oldPath': item.filePath,
+                  'newName': newName,
+                });
+                setState(() {
+                  item.title = newName;
+                  if (updatedPath != null) item.filePath = updatedPath;
+                });
+                setDlPage(() {});
+                await _saveData();
+              }
+              if (mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // FULL-SCREEN CHROME HISTORY PAGE & DELETE BROWSING DATA (Video 2: 00:13 - 00:48)
+  // ===========================================================================
+  void _openFullScreenHistoryPage() {
+    String searchQuery = '';
+    bool showSearch = false;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (pageCtx) => StatefulBuilder(
+          builder: (pageCtx, setHistPage) {
+            final filtered = _history.where((h) {
+              if (searchQuery.trim().isEmpty) return true;
+              final q = searchQuery.toLowerCase();
+              return h.title.toLowerCase().contains(q) ||
+                  h.url.toLowerCase().contains(q);
+            }).toList();
+
+            return Scaffold(
+              backgroundColor: const Color(0xFF12151C),
+              appBar: AppBar(
+                backgroundColor: const Color(0xFF12151C),
+                automaticallyImplyLeading: false,
+                title: showSearch
+                    ? TextField(
+                        autofocus: true,
+                        onChanged: (v) => setHistPage(() => searchQuery = v),
+                        decoration: const InputDecoration(
+                          hintText: 'Search history...',
+                          border: InputBorder.none,
+                        ),
+                      )
+                    : const Text('History',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.info_outline),
+                    onPressed: () => _showToast(
+                        'History is stored locally on your device only.'),
+                  ),
+                  IconButton(
+                    icon: Icon(showSearch ? Icons.search_off : Icons.search),
+                    onPressed: () => setHistPage(() {
+                      showSearch = !showSearch;
+                      if (!showSearch) searchQuery = '';
+                    }),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(pageCtx),
+                  ),
+                ],
+              ),
+              body: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                    color: const Color(0xFF181C26),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'You may see history from links opened in Study Browser.',
+                          style: TextStyle(fontSize: 12.5, color: Colors.white70),
+                        ),
+                        const SizedBox(height: 8),
+                        InkWell(
+                          onTap: () async {
+                            await _openDeleteBrowsingDataDialog();
+                            setHistPage(() {});
+                          },
+                          child: const Text(
+                            'Delete browsing data...',
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              color: Color(0xFFA8C7FA),
+                              decoration: TextDecoration.underline,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: filtered.isEmpty
+                        ? const Center(
+                            child: Text(
+                              'No browsing history here',
+                              style: TextStyle(color: Colors.white54),
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 8),
+                            itemCount: filtered.length,
+                            itemBuilder: (_, i) {
+                              final item = filtered[i];
+                              final host = Uri.tryParse(item.url)
+                                      ?.host
+                                      .replaceAll('www.', '') ??
+                                  item.url;
+                              final showDate = i == 0 ||
+                                  filtered[i - 1].dateGroup != item.dateGroup;
+
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (showDate)
+                                    Padding(
+                                      padding: const EdgeInsets.only(
+                                          top: 10, bottom: 8),
+                                      child: Text(
+                                        item.dateGroup,
+                                        style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.white70,
+                                        ),
+                                      ),
+                                    ),
+                                  ListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    leading: CircleAvatar(
+                                      radius: 18,
+                                      backgroundColor:
+                                          const Color(0xFF1E232E),
+                                      child: Text(
+                                        host.isNotEmpty
+                                            ? host[0].toUpperCase()
+                                            : 'G',
+                                        style: const TextStyle(
+                                            color: Color(0xFFA8C7FA),
+                                            fontWeight: FontWeight.bold),
+                                      ),
+                                    ),
+                                    title: Text(
+                                      item.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    subtitle: Text(
+                                      host,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 12, color: Colors.white54),
+                                    ),
+                                    trailing: IconButton(
+                                      icon: const Icon(Icons.cancel_outlined,
+                                          size: 20, color: Colors.white60),
+                                      onPressed: () async {
+                                        setState(() => _history.remove(item));
+                                        setHistPage(() {});
+                                        await _saveData();
+                                      },
+                                    ),
+                                    onTap: () {
+                                      Navigator.pop(pageCtx);
+                                      _loadFromSearchBar(item.url);
+                                    },
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openDeleteBrowsingDataDialog() async {
+    String timeRange = 'Last 15 minutes';
+    bool delHistory = true;
+    bool delCookies = true;
+    bool delCache = true;
+    bool delTabs = false;
+    bool delAutofill = true;
+
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (pageCtx) => StatefulBuilder(
+          builder: (pageCtx, setDelState) => Scaffold(
+            backgroundColor: const Color(0xFF12151C),
+            appBar: AppBar(
+              backgroundColor: const Color(0xFF12151C),
+              title: const Text('Delete browsing data'),
+            ),
+            body: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Time range',
+                        style: TextStyle(color: Colors.white70)),
+                    DropdownButton<String>(
+                      value: timeRange,
+                      dropdownColor: const Color(0xFF1E232E),
+                      underline: const SizedBox(),
+                      items: const [
+                        DropdownMenuItem(
+                            value: 'Last 15 minutes',
+                            child: Text('Last 15 minutes')),
+                        DropdownMenuItem(
+                            value: 'Last hour', child: Text('Last hour')),
+                        DropdownMenuItem(
+                            value: 'Last 24 hours',
+                            child: Text('Last 24 hours')),
+                        DropdownMenuItem(
+                            value: 'Last 7 days', child: Text('Last 7 days')),
+                        DropdownMenuItem(
+                            value: 'All time', child: Text('All time')),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) setDelState(() => timeRange = v);
+                      },
+                    ),
+                  ],
+                ),
+                const Divider(height: 24),
+                CheckboxListTile(
+                  secondary: const Icon(Icons.history),
+                  title: const Text('Browsing history'),
+                  subtitle: Text('${_history.length} items recorded'),
+                  value: delHistory,
+                  onChanged: (v) =>
+                      setDelState(() => delHistory = v ?? true),
+                ),
+                CheckboxListTile(
+                  secondary: const Icon(Icons.cookie_outlined),
+                  title: const Text('Cookies and site data'),
+                  subtitle: const Text('Signs you out of most sites'),
+                  value: delCookies,
+                  onChanged: (v) =>
+                      setDelState(() => delCookies = v ?? true),
+                ),
+                CheckboxListTile(
+                  secondary: const Icon(Icons.image_outlined),
+                  title: const Text('Cached images and files'),
+                  subtitle: const Text('Frees up WebView storage'),
+                  value: delCache,
+                  onChanged: (v) => setDelState(() => delCache = v ?? true),
+                ),
+                CheckboxListTile(
+                  secondary: const Icon(Icons.tab_outlined),
+                  title: const Text('Close open tabs'),
+                  subtitle: Text('${_tabs.length} tabs currently open'),
+                  value: delTabs,
+                  onChanged: (v) => setDelState(() => delTabs = v ?? false),
+                ),
+                CheckboxListTile(
+                  secondary: const Icon(Icons.edit_outlined),
+                  title: const Text('Autofill form data'),
+                  subtitle: const Text('Clears form entries'),
+                  value: delAutofill,
+                  onChanged: (v) =>
+                      setDelState(() => delAutofill = v ?? true),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Note: Your Focus & Lock passwords and Whitelist rules will NOT be deleted.',
+                  style: TextStyle(fontSize: 12.5, color: Colors.white54),
+                ),
+                const SizedBox(height: 28),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton(
+                    onPressed: () async {
+                      if (delHistory) {
+                        setState(() => _history.clear());
+                      }
+                      if (delCookies) {
+                        await _webController.clearLocalStorage();
+                      }
+                      if (delCache) {
+                        await _webController.clearCache();
+                      }
+                      if (delTabs) {
+                        setState(() {
+                          _tabs = [
+                            BrowserTab(
+                              id: DateTime.now()
+                                  .millisecondsSinceEpoch
+                                  .toString(),
+                              title: 'New Tab',
+                              url: _homepageUrl,
+                            )
+                          ];
+                          _activeTabIndex = 0;
+                        });
+                      }
+                      await _saveData();
+                      if (mounted) Navigator.pop(pageCtx);
+                      _showToast('Browsing data ($timeRange) साफ़ कर दिया गया');
+                    },
+                    child: const Text('Delete data'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // FULL-SCREEN RECENT TABS, BOOKMARKS, SETTINGS & HELP PAGES
+  // ===========================================================================
+  void _openFullScreenRecentTabsPage() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (pageCtx) => Scaffold(
+          backgroundColor: const Color(0xFF12151C),
+          appBar: AppBar(
+            backgroundColor: const Color(0xFF12151C),
+            title: const Text('Recent tabs'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.pop(pageCtx),
+              ),
+            ],
+          ),
+          body: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              const Text(
+                'Recently closed',
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white70),
+              ),
+              const SizedBox(height: 8),
+              if (_recentlyClosedTabs.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: Text('No recently closed tabs',
+                      style: TextStyle(color: Colors.white54)),
+                )
+              else
+                ..._recentlyClosedTabs.map((t) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const CircleAvatar(
+                        backgroundColor: Color(0xFF1E232E),
+                        child:
+                            Icon(Icons.public, color: Color(0xFFA8C7FA), size: 18),
+                      ),
+                      title: Text(t.title,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: Text(t.url,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      onTap: () {
+                        Navigator.pop(pageCtx);
+                        _createNewTab(incognito: false, url: t.url);
+                      },
+                    )),
+              const Divider(height: 28),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0xFF1E232E),
+                  child: Icon(Icons.history, color: Color(0xFFA8C7FA)),
+                ),
+                title: const Text('Show full history'),
+                onTap: () {
+                  Navigator.pop(pageCtx);
+                  _openFullScreenHistoryPage();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openFullScreenBookmarksPage() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (pageCtx) => StatefulBuilder(
+          builder: (pageCtx, setBmPage) => Scaffold(
+            backgroundColor: const Color(0xFF12151C),
+            appBar: AppBar(
+              backgroundColor: const Color(0xFF12151C),
+              title: const Text('Bookmarks'),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.bookmark_add_outlined),
+                  tooltip: 'Bookmark current page',
+                  onPressed: () async {
+                    await _toggleCurrentBookmark();
+                    setBmPage(() {});
+                  },
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(pageCtx),
+                ),
+              ],
+            ),
+            body: _bookmarks.isEmpty
+                ? const Center(
+                    child: Text('No bookmarks saved yet',
+                        style: TextStyle(color: Colors.white54)),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _bookmarks.length,
+                    itemBuilder: (_, i) {
+                      final bm = _bookmarks[i];
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const CircleAvatar(
+                          backgroundColor: Color(0xFF1E232E),
+                          child: Icon(Icons.star,
+                              color: Color(0xFFA8C7FA), size: 18),
+                        ),
+                        title: Text(bm.title,
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: Text(bm.url,
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () async {
+                            setState(() => _bookmarks.removeAt(i));
+                            setBmPage(() {});
+                            await _saveData();
+                          },
+                        ),
+                        onTap: () {
+                          Navigator.pop(pageCtx);
+                          _loadFromSearchBar(bm.url);
+                        },
+                      );
+                    },
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openFullScreenSettingsPage() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (pageCtx) => StatefulBuilder(
+          builder: (pageCtx, setSettingsState) => Scaffold(
+            backgroundColor: const Color(0xFF12151C),
+            appBar: AppBar(
+              backgroundColor: const Color(0xFF12151C),
+              title: const Text('Settings'),
+            ),
+            body: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                _buildSettingsCard(
+                  title: 'Default browser',
+                  subtitle: 'Set Study Browser as your system default browser',
+                  icon: Icons.open_in_browser,
+                  onTap: () {
+                    _intentChannel.invokeMethod('openDefaultAppsSettings');
+                  },
+                ),
+                _buildSettingsCard(
+                  title: 'Search engine',
+                  subtitle: _searchEngineUrl.contains('duckduckgo')
+                      ? 'DuckDuckGo'
+                      : (_searchEngineUrl.contains('bing')
+                          ? 'Microsoft Bing'
+                          : 'Google'),
+                  icon: Icons.search,
+                  onTap: () {
+                    showModalBottomSheet(
+                      context: context,
+                      backgroundColor: const Color(0xFF1E232E),
+                      builder: (ctx) => Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          ListTile(
+                            title: const Text('Google (Default)'),
+                            onTap: () {
+                              setState(() => _searchEngineUrl =
+                                  'https://www.google.com/search?q=');
+                              setSettingsState(() {});
+                              _saveData();
+                              Navigator.pop(ctx);
+                            },
+                          ),
+                          ListTile(
+                            title: const Text('DuckDuckGo'),
+                            onTap: () {
+                              setState(() => _searchEngineUrl =
+                                  'https://duckduckgo.com/?q=');
+                              setSettingsState(() {});
+                              _saveData();
+                              Navigator.pop(ctx);
+                            },
+                          ),
+                          ListTile(
+                            title: const Text('Bing'),
+                            onTap: () {
+                              setState(() => _searchEngineUrl =
+                                  'https://www.bing.com/search?q=');
+                              setSettingsState(() {});
+                              _saveData();
+                              Navigator.pop(ctx);
+                            },
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 10),
+                  child: Text('Advanced',
+                      style: TextStyle(
+                          color: Color(0xFFA8C7FA),
+                          fontWeight: FontWeight.w600)),
+                ),
+                _buildSettingsCard(
+                  title: 'Tabs and tab groups',
+                  subtitle: '${_tabs.length} open tabs • Auto-restore enabled',
+                  icon: Icons.layers_outlined,
+                  onTap: () {
+                    Navigator.pop(pageCtx);
+                    _openFullScreenTabSwitcher();
+                  },
+                ),
+                _buildSettingsCard(
+                  title: 'Homepage',
+                  subtitle: 'On • $_homepageUrl',
+                  icon: Icons.home_outlined,
+                  onTap: () {
+                    final ctrl = TextEditingController(text: _homepageUrl);
+                    showDialog(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        backgroundColor: const Color(0xFF1E232E),
+                        title: const Text('Homepage URL'),
+                        content: TextField(controller: ctrl),
+                        actions: [
+                          TextButton(
+                              onPressed: () => Navigator.pop(ctx),
+                              child: const Text('Cancel')),
+                          FilledButton(
+                            onPressed: () {
+                              setState(
+                                  () => _homepageUrl = ctrl.text.trim());
+                              setSettingsState(() {});
+                              _saveData();
+                              Navigator.pop(ctx);
+                            },
+                            child: const Text('Save'),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+                _buildSettingsCard(
+                  title: 'Focus & Lock Security',
+                  subtitle:
+                      'Manage YouTube Shorts, Instagram Reels & Group Locks',
+                  icon: Icons.shield_outlined,
+                  onTap: () {
+                    Navigator.pop(pageCtx);
+                    _openLockManagerSheet();
+                  },
+                ),
+                _buildSettingsCard(
+                  title: 'Site settings',
+                  subtitle:
+                      'Desktop mode: ${_isDesktopMode ? "On" : "Off"} • Default Zoom: $_zoomPercent%',
+                  icon: Icons.tune,
+                  onTap: () {
+                    _toggleDesktopMode();
+                    setSettingsState(() {});
+                  },
+                ),
+                _buildSettingsCard(
+                  title: 'Downloads',
+                  subtitle: '/storage/emulated/0/Download',
+                  icon: Icons.download_done_outlined,
+                  onTap: () {
+                    Navigator.pop(pageCtx);
+                    _openFullScreenDownloadsPage();
+                  },
+                ),
+                _buildSettingsCard(
+                  title: 'About Study Browser',
+                  subtitle: 'Version 2.0.0 • Chrome Dark UI + Focus Vault',
+                  icon: Icons.info_outline,
+                  onTap: () {},
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSettingsCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E232E),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: ListTile(
+        leading: Icon(icon, color: const Color(0xFFA8C7FA)),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w500)),
+        subtitle: Text(subtitle,
+            style: const TextStyle(fontSize: 12, color: Colors.white60)),
+        onTap: onTap,
+      ),
+    );
+  }
+
+  void _openFullScreenHelpPage() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (pageCtx) => Scaffold(
+          backgroundColor: const Color(0xFF12151C),
+          appBar: AppBar(
+            backgroundColor: const Color(0xFF12151C),
+            title: const Text('Help & Feedback'),
+          ),
+          body: ListView(
+            padding: const EdgeInsets.all(16),
+            children: const [
+              Text(
+                'Popular help resources',
+                style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFFA8C7FA)),
+              ),
+              SizedBox(height: 12),
+              ListTile(
+                leading: Icon(Icons.article_outlined, color: Color(0xFFA8C7FA)),
+                title: Text('How Time-Vault & Focus Locks work'),
+                subtitle: Text(
+                    'Generate a 16-digit password, copy it to Chronocrypt Vault, and lock distracting sites or YouTube Shorts.'),
+              ),
+              Divider(),
+              ListTile(
+                leading: Icon(Icons.desktop_windows_outlined,
+                    color: Color(0xFFA8C7FA)),
+                title: Text('Using Desktop Site Mode'),
+                subtitle: Text(
+                    'Turn on Desktop site from the 3-dot menu to view full 1280px computer layouts on mobile.'),
+              ),
+              Divider(),
+              ListTile(
+                leading:
+                    Icon(Icons.add_to_home_screen, color: Color(0xFFA8C7FA)),
+                title: Text('Install & Create Home Screen Shortcuts'),
+                subtitle: Text(
+                    'Use "Install and create shortcut" in the 3-dot menu to pin any study web app directly to your Realme home screen.'),
+              ),
+              Divider(),
+              ListTile(
+                leading:
+                    Icon(Icons.download_done_outlined, color: Color(0xFFA8C7FA)),
+                title: Text('Opening Downloaded ZIP, PDF & Offline Pages'),
+                subtitle: Text(
+                    'Tap any file in Downloads to open it directly or choose an app (Files by Google, WPS Office) via Open With.'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2190,7 +3958,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                   label: Text('${_lockGroups.first.name} ग्रुप में यह साइट डालें'),
                   onPressed: () async {
                     final group = _lockGroups.first;
-                    final clean = _stripHostPrefix(host);
+                    final clean = host.replaceAll('www.', '');
                     if (!group.domains.contains(clean)) {
                       setState(() => group.domains.add(clean));
                       await _saveData();
@@ -2214,13 +3982,12 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   // ===========================================================================
-  // PASSWORD DIALOGS (Time-Vault Compatible)
+  // PASSWORD DIALOGS & CLEAN 2-TAB FOCUS LOCK MANAGER
   // ===========================================================================
   Future<String?> _promptPasswordVerification({
     required String title,
     required String expectedHash,
     bool allowTempUnlock = true,
-    String confirmLabel = 'Permanent Unlock',
   }) async {
     final passCtrl = TextEditingController();
     String? errorText;
@@ -2283,7 +4050,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                   setDialogState(() => errorText = 'गलत पासवर्ड!');
                 }
               },
-              child: Text(confirmLabel),
+              child: const Text('Permanent Unlock'),
             ),
           ],
         ),
@@ -2375,9 +4142,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     );
   }
 
-  // ===========================================================================
-  // CLEAN & PROFESSIONAL FOCUS & LOCK MANAGER (2-TAB DESIGN)
-  // ===========================================================================
   void _openLockManagerSheet() {
     showModalBottomSheet(
       context: context,
@@ -2432,7 +4196,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
 
               return Column(
                 children: [
-                  // HEADER
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 14, 12, 6),
                     child: Row(
@@ -2448,7 +4211,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w600,
-                                letterSpacing: 0.2,
                               ),
                             ),
                           ],
@@ -2460,8 +4222,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                       ],
                     ),
                   ),
-
-                  // CLEAN 2-TAB BAR
                   Container(
                     margin:
                         const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -2485,16 +4245,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                       ],
                     ),
                   ),
-
                   Expanded(
                     child: TabBarView(
                       children: [
-                        // TAB 1: FOCUS CONTROLS (YOUTUBE, INSTA, WHITELIST)
+                        // TAB 1: FOCUS CONTROLS
                         ListView(
                           controller: scrollCtrl,
                           padding: const EdgeInsets.all(16),
                           children: [
-                            // Password Status Banner
                             Container(
                               padding: const EdgeInsets.all(14),
                               decoration: BoxDecoration(
@@ -2582,10 +4340,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                 ],
                               ),
                             ),
-
                             const SizedBox(height: 14),
-
-                            // Switches Card
                             Container(
                               decoration: BoxDecoration(
                                 color: const Color(0xFF1E232E),
@@ -2659,10 +4414,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                 ],
                               ),
                             ),
-
                             const SizedBox(height: 14),
-
-                            // Visible Whitelist Domains Card
                             Container(
                               padding: const EdgeInsets.all(14),
                               decoration: BoxDecoration(
@@ -2730,7 +4482,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                           ],
                         ),
 
-                        // TAB 2: CUSTOM SITE LOCK GROUPS
+                        // TAB 2: SITE LOCK GROUPS
                         ListView(
                           padding: const EdgeInsets.all(16),
                           children: [
@@ -2946,17 +4698,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   Future<void> _promptAddWhitelistDomain(StateSetter setSheetState) async {
-    // Whitelist lock chalu ho to naya site jodne ke liye bhi password chahiye
-    if (_whitelistMode && _isFeatureLockActive) {
-      final res = await _promptPasswordVerification(
-        title: 'Whitelist में साइट जोड़ने के लिए पासवर्ड',
-        expectedHash: _featurePassHash,
-        allowTempUnlock: false,
-        confirmLabel: 'Verify',
-      );
-      if (res != 'FULL') return;
-      if (!mounted) return;
-    }
     final ctrl = TextEditingController();
     await showDialog(
       context: context,
@@ -2977,7 +4718,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           ),
           FilledButton(
             onPressed: () async {
-              final d = _cleanRuleDomain(ctrl.text);
+              final d = ctrl.text
+                  .trim()
+                  .toLowerCase()
+                  .replaceAll('https://', '')
+                  .replaceAll('http://', '')
+                  .replaceAll('www.', '')
+                  .split('/')
+                  .first;
               if (d.isNotEmpty && !_whitelistedDomains.contains(d)) {
                 setState(() => _whitelistedDomains.add(d));
                 setSheetState(() {});
@@ -3060,7 +4808,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           ),
           FilledButton(
             onPressed: () async {
-              final raw = _cleanRuleDomain(domainCtrl.text);
+              final raw = domainCtrl.text
+                  .trim()
+                  .toLowerCase()
+                  .replaceAll('https://', '')
+                  .replaceAll('http://', '')
+                  .replaceAll('www.', '')
+                  .split('/')
+                  .first;
               if (raw.isNotEmpty && !group.domains.contains(raw)) {
                 setState(() => group.domains.add(raw));
                 setSheetState(() {});
@@ -3076,127 +4831,40 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     );
   }
 
-  void _openBookmarksSheet() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1A1F29),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setBmState) => Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Bookmarks',
-                    style:
-                        TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
-                  ),
-                  FilledButton.tonalIcon(
-                    icon: const Icon(Icons.bookmark_add_outlined, size: 17),
-                    label: const Text('Add Current Page'),
-                    onPressed: () async {
-                      await _toggleCurrentBookmark();
-                      setBmState(() {});
-                    },
-                  ),
-                ],
-              ),
-              const Divider(height: 18),
-              Flexible(
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: _bookmarks.length,
-                  itemBuilder: (_, i) {
-                    final bm = _bookmarks[i];
-                    return ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.bookmark_border,
-                          color: Color(0xFFA8C7FA)),
-                      title: Text(bm.title,
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text(
-                        bm.url,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 12, color: Colors.white54),
-                      ),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.delete_outline, size: 19),
-                        onPressed: () async {
-                          setState(() => _bookmarks.removeAt(i));
-                          setBmState(() {});
-                          await _saveData();
-                        },
-                      ),
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        _loadFromSearchBar(bm.url);
-                      },
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   // ===========================================================================
-  // MAIN SCAFFOLD & CHROME-STYLE TOP BAR
+  // MAIN SCAFFOLD (TOP BAR + WEBVIEW + AUTO-HIDING BOTTOM ZOOM OVERLAY)
   // ===========================================================================
-  Future<void> _handleBackPressed() async {
-    if (_showFindBar || _showZoomBar) {
-      setState(() {
-        _showFindBar = false;
-        _showZoomBar = false;
-      });
-      return;
-    }
-    if (_isReadingMode) {
-      await _toggleReadingMode();
-      return;
-    }
-    if (_isPageBlocked) {
-      setState(() => _isPageBlocked = false);
-      _loadFromSearchBar('https://www.google.com');
-      return;
-    }
-    try {
-      if (await _webController.canGoBack()) {
-        await _webController.goBack();
-        return;
-      }
-    } catch (_) {}
-    if (_tabs.length > 1) {
-      // History khatam: Chrome ki tarah current tab band karo
-      _closeTab(_activeTabIndex);
-      return;
-    }
-    SystemNavigator.pop();
-  }
-
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, result) {
-        if (didPop) return;
-        _handleBackPressed();
+    return WillPopScope(
+      onWillPop: () async {
+        if (_showFindBar || _showZoomBar) {
+          setState(() {
+            _showFindBar = false;
+            _showZoomBar = false;
+          });
+          return false;
+        }
+        if (_isReadingMode) {
+          await _toggleReadingMode();
+          return false;
+        }
+        if (_isPageBlocked) {
+          setState(() => _isPageBlocked = false);
+          _loadFromSearchBar(_homepageUrl);
+          return false;
+        }
+        if (await _webController.canGoBack()) {
+          await _webController.goBack();
+          return false;
+        }
+        return true;
       },
       child: Scaffold(
         body: SafeArea(
           child: Column(
             children: [
-              // TOP CHROME-STYLE BAR
+              // TOP CHROME BAR
               Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
@@ -3213,8 +4881,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                     IconButton(
                       icon: const Icon(Icons.home_outlined, size: 22),
                       tooltip: 'Home',
-                      onPressed: () =>
-                          _loadFromSearchBar('https://www.google.com'),
+                      onPressed: () => _loadFromSearchBar(_homepageUrl),
                     ),
                     Expanded(
                       child: Container(
@@ -3226,7 +4893,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         ),
                         child: TextField(
                           controller: _urlController,
-                          focusNode: _urlFocus,
                           textInputAction: TextInputAction.go,
                           onSubmitted: _loadFromSearchBar,
                           style: const TextStyle(fontSize: 13.5),
@@ -3253,9 +4919,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                       ),
                     ),
                     const SizedBox(width: 4),
-                    // Tab Counter Button (Chrome style [1])
+                    // Tab Counter Box [ 1 ] -> Opens Chrome Grid Tab Switcher
                     InkWell(
-                      onTap: _openTabsSwitcherSheet,
+                      onTap: _openFullScreenTabSwitcher,
                       borderRadius: BorderRadius.circular(8),
                       child: Container(
                         width: 24,
@@ -3276,14 +4942,12 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         ),
                       ),
                     ),
-                    // Shield Button (Focus & Lock Manager)
                     IconButton(
                       icon: const Icon(Icons.shield_outlined,
                           size: 21, color: Color(0xFFA8C7FA)),
                       tooltip: 'Focus & Lock Manager',
                       onPressed: _openLockManagerSheet,
                     ),
-                    // Chrome 3-Dot Menu Button
                     IconButton(
                       icon: const Icon(Icons.more_vert, size: 22),
                       tooltip: 'More options',
@@ -3293,7 +4957,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 ),
               ),
 
-              // OPTIONAL FIND IN PAGE BAR
+              // FIND IN PAGE BAR
               if (_showFindBar)
                 Container(
                   padding:
@@ -3331,57 +4995,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                   ),
                 ),
 
-              // OPTIONAL ZOOM CONTROL BAR
-              if (_showZoomBar)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-                  color: const Color(0xFF1E232E),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('Page Zoom: $_zoomPercent%',
-                          style: const TextStyle(fontSize: 13.5)),
-                      Row(
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.remove_circle_outline,
-                                size: 20),
-                            onPressed: () {
-                              setState(() {
-                                _zoomPercent = (_zoomPercent - 15).clamp(50, 200);
-                              });
-                              _injectFocusScripts();
-                            },
-                          ),
-                          TextButton(
-                            onPressed: () {
-                              setState(() => _zoomPercent = 100);
-                              _injectFocusScripts();
-                            },
-                            child: const Text('Reset'),
-                          ),
-                          IconButton(
-                            icon:
-                                const Icon(Icons.add_circle_outline, size: 20),
-                            onPressed: () {
-                              setState(() {
-                                _zoomPercent = (_zoomPercent + 15).clamp(50, 200);
-                              });
-                              _injectFocusScripts();
-                            },
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.close, size: 18),
-                            onPressed: () =>
-                                setState(() => _showZoomBar = false),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-
               if (_loadingProgress < 100)
                 LinearProgressIndicator(
                   value: _loadingProgress / 100.0,
@@ -3390,21 +5003,115 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                   backgroundColor: Colors.transparent,
                 ),
 
-              // MAIN WEBVIEW OR BLOCKED OVERLAY
+              // MAIN WEBVIEW + FLOATING CHROME ZOOM BAR + BLOCKED OVERLAY
               Expanded(
                 child: Stack(
                   children: [
-                    IndexedStack(
-                      index: _activeTabIndex,
-                      sizing: StackFit.expand,
-                      children: [
-                        for (final tab in _tabs)
-                          WebViewWidget(
-                            key: ValueKey(tab.id),
-                            controller: tab.controller,
-                          ),
-                      ],
-                    ),
+                    WebViewWidget(controller: _webController),
+
+                    // CHROME-STYLE BOTTOM FLOATING ZOOM CONTROL (Auto-Hides after 4s)
+                    if (_showZoomBar)
+                      Positioned(
+                        left: 16,
+                        right: 16,
+                        bottom: 18,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Top Pill: [ 100% | Reset ]
+                            Material(
+                              color: const Color(0xFF1E232E),
+                              elevation: 8,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                                side: const BorderSide(
+                                    color: Color(0xFF2E3646)),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 4),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      '$_zoomPercent %',
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 14),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    TextButton(
+                                      onPressed: () {
+                                        setState(() => _zoomPercent = 100);
+                                        _injectFocusScripts();
+                                        _scheduleZoomAutoHide();
+                                      },
+                                      child: const Text('Reset'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            // Bottom Slider Bar: [ - ] ====●==== [ + ]
+                            Material(
+                              color: const Color(0xFF1E232E),
+                              elevation: 10,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(28),
+                                side: const BorderSide(
+                                    color: Color(0xFF2E3646)),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 4),
+                                child: Row(
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.remove),
+                                      onPressed: () {
+                                        setState(() {
+                                          _zoomPercent =
+                                              (_zoomPercent - 10).clamp(50, 200);
+                                        });
+                                        _injectFocusScripts();
+                                        _scheduleZoomAutoHide();
+                                      },
+                                    ),
+                                    Expanded(
+                                      child: Slider(
+                                        value: _zoomPercent.toDouble(),
+                                        min: 50,
+                                        max: 200,
+                                        divisions: 15,
+                                        activeColor: const Color(0xFF3B82F6),
+                                        onChanged: (v) {
+                                          setState(
+                                              () => _zoomPercent = v.round());
+                                          _injectFocusScripts();
+                                          _scheduleZoomAutoHide();
+                                        },
+                                      ),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.add),
+                                      onPressed: () {
+                                        setState(() {
+                                          _zoomPercent =
+                                              (_zoomPercent + 10).clamp(50, 200);
+                                        });
+                                        _injectFocusScripts();
+                                        _scheduleZoomAutoHide();
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
                     if (_isPageBlocked) _buildBlockedOverlay(),
                   ],
                 ),
@@ -3464,7 +5171,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             label: const Text('Back to Study (Google)'),
             onPressed: () {
               setState(() => _isPageBlocked = false);
-              _loadFromSearchBar('https://www.google.com');
+              _loadFromSearchBar(_homepageUrl);
             },
           ),
           const SizedBox(height: 12),
