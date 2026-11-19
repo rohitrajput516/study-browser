@@ -748,7 +748,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             if (igEl) igEl.remove();
           }
         }
-      }
 
       // 5. CHROME-STYLE IMAGE LONG-PRESS CONTEXT MENU DETECTOR
       if (!window.__SB_IMG_LONGPRESS_SET) {
@@ -962,6 +961,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           }
         })();
 
+      }
 
       if (!window.__SB_INTERVAL_SET) {
         window.__SB_INTERVAL_SET = true;
