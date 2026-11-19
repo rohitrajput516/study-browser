@@ -7055,13 +7055,29 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         }
         return true;
       },
-      child: Scaffold(
+           child: Scaffold(
         backgroundColor: p.bg,
         body: SafeArea(
           child: Column(
             children: [
-              
-                                  Expanded(
+              // TOP CHROME BAR
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                decoration: BoxDecoration(
+                  color: p.bg,
+                  border: Border(
+                    bottom: BorderSide(color: p.border, width: 0.8),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: Icon(Icons.home_outlined, size: 22, color: p.text),
+                      tooltip: 'Home',
+                      onPressed: () => _loadFromSearchBar(_homepageUrl),
+                    ),
+                    Expanded(
                       child: InkWell(
                         onTap: _openChromeAddressBarOverlay,
                         borderRadius: BorderRadius.circular(22),
@@ -7096,8 +7112,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         ),
                       ),
                     ),
-
-              
+                    const SizedBox(width: 4),
                     // Tab Counter Box [ 1 ]
                     InkWell(
                       onTap: _openFullScreenTabSwitcher,
@@ -7135,8 +7150,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                   ],
                 ),
               ),
-
-              // FIND IN PAGE BAR
+ 
               if (_showFindBar)
                 Container(
                   padding:
