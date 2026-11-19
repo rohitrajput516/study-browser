@@ -438,6 +438,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   bool _isDesktopMode = false;
   bool _isIncognito = false;
   bool _isReadingMode = false;
+    static const String _ntpUrl = 'study://newtab';
+  bool _isVideoFullscreen = false;
+
   bool _showFindBar = false;
   bool _showZoomBar = false;
   int _zoomPercent = 100;
@@ -634,31 +637,30 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         var host = (window.location.hostname || '').toLowerCase();
         var path = window.location.pathname || '';
 
-        // 1. REAL DESKTOP SITE VIEWPORT & SCALING
+        // 1. REAL CHROME DESKTOP SITE VIEWPORT (980px EXACT MATCH)
         var vpMeta = document.querySelector('meta[name="viewport"]');
         if (window.__SB_DESKTOP_MODE) {
-          var screenW = window.screen.width || 360;
-          var targetScale = (screenW / 1280.0).toFixed(3);
-          var desiredContent = 'width=1280, initial-scale=' + targetScale + ', minimum-scale=0.1, maximum-scale=5.0, user-scalable=yes';
+          var desiredContent = 'width=980, user-scalable=yes';
           if (!vpMeta) {
             vpMeta = document.createElement('meta');
             vpMeta.name = 'viewport';
-            document.head.appendChild(vpMeta);
+            (document.head || document.documentElement).appendChild(vpMeta);
           }
           if (vpMeta.getAttribute('content') !== desiredContent) {
             vpMeta.setAttribute('content', desiredContent);
           }
-          if (window.innerWidth > 0 && window.innerWidth < 980 && document.documentElement) {
-            document.documentElement.style.minWidth = '1280px';
+          if (document.documentElement) {
+            document.documentElement.style.minWidth = '';
           }
         } else {
-          if (vpMeta && vpMeta.getAttribute('content') && vpMeta.getAttribute('content').includes('width=1280')) {
+          if (vpMeta && (vpMeta.getAttribute('content') || '').indexOf('width=980') !== -1) {
             vpMeta.setAttribute('content', 'width=device-width, initial-scale=1.0');
           }
-          if (document.documentElement && document.documentElement.style.minWidth === '1280px') {
+          if (document.documentElement && document.documentElement.style.minWidth) {
             document.documentElement.style.minWidth = '';
           }
         }
+
 
         // 2. PAGE ZOOM CONTROL
         if (document.body && window.__SB_ZOOM_PERCENT) {
@@ -749,68 +751,102 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           }
         }
 
-      // 5. CHROME-STYLE IMAGE LONG-PRESS CONTEXT MENU DETECTOR
+            // 5. SMART CHROME LONG-PRESS DETECTOR (STRICT IMAGE + LINK + VIDEO)
       if (!window.__SB_IMG_LONGPRESS_SET) {
         window.__SB_IMG_LONGPRESS_SET = true;
         var lpTimer = null;
         var lpStartX = 0;
         var lpStartY = 0;
 
-        function findImageFromTarget(el) {
-          var curr = el;
-          for (var i = 0; i < 4 && curr; i++) {
-            if (curr.tagName && curr.tagName.toLowerCase() === 'img' && curr.src) {
-              return curr;
-            }
-            if (curr.querySelector) {
-              var nested = curr.querySelector('img');
-              if (nested && nested.src && curr.getBoundingClientRect().width < window.innerWidth * 1.05) {
-                if (el === curr || el.tagName === 'DIV') return nested;
+        function inspectLongPressTarget(el, clientX, clientY) {
+          if (!el) return null;
+
+          // 1. Strict Image Check (only if touch is directly on an <img>)
+          var imgEl = null;
+          if (el.tagName && el.tagName.toLowerCase() === 'img' && el.src) {
+            imgEl = el;
+          } else if (document.elementsFromPoint && clientX > 0 && clientY > 0) {
+            var stack = document.elementsFromPoint(clientX, clientY);
+            for (var i = 0; i < Math.min(stack.length, 3); i++) {
+              if (stack[i].tagName && stack[i].tagName.toLowerCase() === 'img' && stack[i].src) {
+                var r = stack[i].getBoundingClientRect();
+                if (r.width >= 32 && r.height >= 32) {
+                  imgEl = stack[i];
+                  break;
+                }
               }
             }
-            curr = curr.parentElement;
           }
+          if (imgEl && (imgEl.currentSrc || imgEl.src).startsWith('http')) {
+            return {
+              type: 'context_long_press',
+              kind: 'image',
+              src: imgEl.currentSrc || imgEl.src,
+              alt: imgEl.alt || document.title || 'Image',
+              pageUrl: window.location.href
+            };
+          }
+
+          // 2. Video Check
+          var vidEl = el.closest ? el.closest('video') : null;
+          if (vidEl) {
+            var vSrc = vidEl.currentSrc || vidEl.src || '';
+            if (!vSrc) {
+              var sEl = vidEl.querySelector('source[src]');
+              if (sEl) vSrc = sEl.src;
+            }
+            if (vSrc && vSrc.startsWith('http')) {
+              return {
+                type: 'context_long_press',
+                kind: 'video',
+                src: vSrc,
+                text: document.title || 'Video',
+                pageUrl: window.location.href
+              };
+            }
+          }
+
+          // 3. Link Check (<a href>)
+          var linkEl = el.closest ? el.closest('a[href]') : null;
+          if (linkEl && linkEl.href && linkEl.href.startsWith('http')) {
+            return {
+              type: 'context_long_press',
+              kind: 'link',
+              href: linkEl.href,
+              text: (linkEl.innerText || linkEl.title || linkEl.href).trim().slice(0, 120),
+              pageUrl: window.location.href
+            };
+          }
+
           return null;
         }
 
         document.addEventListener('contextmenu', function(e) {
-          var img = findImageFromTarget(e.target);
-          if (img && img.src && img.src.startsWith('http')) {
+          var payload = inspectLongPressTarget(e.target, e.clientX || 0, e.clientY || 0);
+          if (payload && window.StudyBrowserBridge) {
             e.preventDefault();
             e.stopPropagation();
-            if (window.StudyBrowserBridge) {
-              window.StudyBrowserBridge.postMessage(JSON.stringify({
-                type: 'image_long_press',
-                src: img.currentSrc || img.src,
-                alt: img.alt || document.title || 'Image',
-                pageUrl: window.location.href
-              }));
-            }
+            window.StudyBrowserBridge.postMessage(JSON.stringify(payload));
           }
         }, true);
 
         document.addEventListener('touchstart', function(e) {
           if (e.touches.length !== 1) return;
-          var img = findImageFromTarget(e.target);
-          if (!img || !img.src || !img.src.startsWith('http')) return;
           lpStartX = e.touches[0].clientX;
           lpStartY = e.touches[0].clientY;
+          var targetEl = e.target;
           clearTimeout(lpTimer);
           lpTimer = setTimeout(function() {
-            if (window.StudyBrowserBridge) {
-              window.StudyBrowserBridge.postMessage(JSON.stringify({
-                type: 'image_long_press',
-                src: img.currentSrc || img.src,
-                alt: img.alt || document.title || 'Image',
-                pageUrl: window.location.href
-              }));
+            var payload = inspectLongPressTarget(targetEl, lpStartX, lpStartY);
+            if (payload && window.StudyBrowserBridge) {
+              window.StudyBrowserBridge.postMessage(JSON.stringify(payload));
             }
-          }, 520);
+          }, 560);
         }, { passive: true });
 
         document.addEventListener('touchmove', function(e) {
           if (!lpTimer || e.touches.length !== 1) return;
-          if (Math.abs(e.touches[0].clientX - lpStartX) > 14 || Math.abs(e.touches[0].clientY - lpStartY) > 14) {
+          if (Math.abs(e.touches[0].clientX - lpStartX) > 12 || Math.abs(e.touches[0].clientY - lpStartY) > 12) {
             clearTimeout(lpTimer);
             lpTimer = null;
           }
@@ -821,6 +857,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           lpTimer = null;
         }, { passive: true });
       }
+
       
       
               // 6. PERMANENT BLOCKED SITES - HIDE FROM SEARCH RESULTS
@@ -962,6 +999,49 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         })();
 
       }
+      
+            // 7. FULLSCREEN VIDEO & SAFE PULL-TO-REFRESH BRIDGE
+      if (!window.__SB_EXTRA_EVENTS_SET) {
+        window.__SB_EXTRA_EVENTS_SET = true;
+
+        function notifyFs() {
+          var isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+          if (window.StudyBrowserBridge) {
+            window.StudyBrowserBridge.postMessage(JSON.stringify({
+              type: 'fullscreen_change',
+              active: isFs
+            }));
+          }
+        }
+        document.addEventListener('fullscreenchange', notifyFs, true);
+        document.addEventListener('webkitfullscreenchange', notifyFs, true);
+
+        var ptrStartY = 0;
+        var ptrStartX = 0;
+        var ptrEligible = false;
+        document.addEventListener('touchstart', function(e) {
+          if (e.touches.length === 1 && window.scrollY <= 0) {
+            ptrStartY = e.touches[0].clientY;
+            ptrStartX = e.touches[0].clientX;
+            ptrEligible = true;
+          } else {
+            ptrEligible = false;
+          }
+        }, { passive: true });
+
+        document.addEventListener('touchend', function(e) {
+          if (!ptrEligible || e.changedTouches.length !== 1) return;
+          var dy = e.changedTouches[0].clientY - ptrStartY;
+          var dx = Math.abs(e.changedTouches[0].clientX - ptrStartX);
+          ptrEligible = false;
+          if (window.scrollY <= 0 && dy > 140 && dx < 45 && window.StudyBrowserBridge) {
+            window.StudyBrowserBridge.postMessage(JSON.stringify({
+              type: 'pull_to_refresh'
+            }));
+          }
+        }, { passive: true });
+      }
+
 
       if (!window.__SB_INTERVAL_SET) {
         window.__SB_INTERVAL_SET = true;
@@ -1486,9 +1566,13 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             }
 
 
-            final lower = reqUrl.toLowerCase().split('?').first;
-            if (lower.endsWith('.pdf') ||
-                lower.endsWith('.zip') ||
+                        final lower = reqUrl.toLowerCase().split('?').first;
+            if (lower.endsWith('.pdf') &&
+                !reqUrl.contains('docs.google.com/gview')) {
+              _openInAppPdfViewer(pdfUrl: reqUrl);
+              return NavigationDecision.prevent;
+            }
+            if (lower.endsWith('.zip') ||
                 lower.endsWith('.apk') ||
                 lower.endsWith('.doc') ||
                 lower.endsWith('.docx') ||
@@ -1497,6 +1581,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
               _triggerRealFileDownload(reqUrl);
               return NavigationDecision.prevent;
             }
+
 
             return NavigationDecision.navigate;
           },
@@ -1511,16 +1596,285 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   void _handleJsBridgeMessage(String raw) {
     try {
       final decoded = jsonDecode(raw);
-      if (decoded is Map && decoded['type'] == 'image_long_press') {
+      if (decoded is! Map) return;
+      final type = (decoded['type'] ?? '').toString();
+
+      if (type == 'image_long_press') {
         final src = (decoded['src'] ?? '').toString();
         final alt = (decoded['alt'] ?? 'Image').toString();
         if (src.isNotEmpty) {
           HapticFeedback.mediumImpact();
           _openImageLongPressDialog(src, alt);
         }
+      } else if (type == 'context_long_press') {
+        final kind = (decoded['kind'] ?? '').toString();
+        HapticFeedback.mediumImpact();
+        if (kind == 'image') {
+          final src = (decoded['src'] ?? '').toString();
+          final alt = (decoded['alt'] ?? 'Image').toString();
+          if (src.isNotEmpty) _openImageLongPressDialog(src, alt);
+        } else if (kind == 'link') {
+          final href = (decoded['href'] ?? '').toString();
+          final text = (decoded['text'] ?? '').toString();
+          if (href.isNotEmpty) _openLinkLongPressDialog(href, text);
+        } else if (kind == 'video') {
+          final src = (decoded['src'] ?? '').toString();
+          final text = (decoded['text'] ?? 'Video').toString();
+          if (src.isNotEmpty) _openVideoLongPressDialog(src, text);
+        }
+      } else if (type == 'fullscreen_change') {
+        final active = decoded['active'] == true;
+        _setVideoFullscreen(active);
+      } else if (type == 'pull_to_refresh') {
+        if (!_isPageBlocked && _currentUrl != _ntpUrl) {
+          HapticFeedback.lightImpact();
+          _webController.reload();
+        }
       }
     } catch (_) {}
   }
+
+  Future<void> _setVideoFullscreen(bool active) async {
+    if (!mounted || _isVideoFullscreen == active) return;
+    setState(() => _isVideoFullscreen = active);
+    if (active) {
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+        DeviceOrientation.portraitUp,
+      ]);
+    } else {
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    }
+  }
+
+  void _openLinkLongPressDialog(String href, String linkText) {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: p.menuBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    _buildSiteFavicon(href, p, boxSize: 40, iconSize: 22),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (linkText.isNotEmpty)
+                            Text(
+                              linkText,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: p.text),
+                            ),
+                          Text(
+                            href,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 12, color: p.subtext),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Divider(height: 12, color: p.border),
+              ListTile(
+                title: Text('Open in new tab',
+                    style: TextStyle(color: p.text, fontSize: 15)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openUrlInBackgroundTab(href, title: linkText);
+                },
+              ),
+              ListTile(
+                title: Text('Open in new tab in group',
+                    style: TextStyle(color: p.text, fontSize: 15)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  String? grpId = (_tabs.isNotEmpty &&
+                          _activeTabIndex < _tabs.length)
+                      ? _tabs[_activeTabIndex].groupId
+                      : null;
+                  if (grpId == null) {
+                    final newGrp = BrowserTabGroup(
+                      id: DateTime.now().millisecondsSinceEpoch.toString(),
+                      title: 'Tab group',
+                      colorValue: 0xFF3B82F6,
+                    );
+                    setState(() {
+                      _tabGroups.add(newGrp);
+                      if (_tabs.isNotEmpty && _activeTabIndex < _tabs.length) {
+                        _tabs[_activeTabIndex].groupId = newGrp.id;
+                      }
+                    });
+                    grpId = newGrp.id;
+                  }
+                  final newTab = BrowserTab(
+                    id: '${DateTime.now().millisecondsSinceEpoch}_g',
+                    title: linkText.isNotEmpty ? linkText : href,
+                    url: href,
+                    isIncognito: _isIncognito,
+                    isDesktop: _isDesktopMode,
+                    groupId: grpId,
+                  );
+                  setState(() => _tabs.add(newTab));
+                  _saveData();
+                  _showToast('Opened in tab group');
+                },
+              ),
+              ListTile(
+                title: Text('Open in Incognito tab',
+                    style: TextStyle(color: p.text, fontSize: 15)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _createNewTab(incognito: true, url: href);
+                },
+              ),
+              ListTile(
+                title: Text('Copy link address',
+                    style: TextStyle(color: p.text, fontSize: 15)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Clipboard.setData(ClipboardData(text: href));
+                  _showToast('Link address copied');
+                },
+              ),
+              if (linkText.isNotEmpty && linkText != href)
+                ListTile(
+                  title: Text('Copy link text',
+                      style: TextStyle(color: p.text, fontSize: 15)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    Clipboard.setData(ClipboardData(text: linkText));
+                    _showToast('Link text copied');
+                  },
+                ),
+              ListTile(
+                title: Text('Download link',
+                    style: TextStyle(color: p.text, fontSize: 15)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _triggerRealFileDownload(href);
+                },
+              ),
+              ListTile(
+                title: Text('Share link',
+                    style: TextStyle(color: p.text, fontSize: 15)),
+                trailing: InkWell(
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _shareLinkViaApp(href, linkText, _lastSharedApp);
+                  },
+                  borderRadius: BorderRadius.circular(14),
+                  child: _buildLastShareAppBadge(),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openChromeShareSheet(
+                    overrideUrl: href,
+                    overrideTitle: linkText,
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openVideoLongPressDialog(String videoUrl, String title) {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: p.menuBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: p.surfaceVariant,
+                  child: Icon(Icons.videocam_outlined, color: p.accent),
+                ),
+                title: Text(title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: p.text, fontWeight: FontWeight.w600)),
+                subtitle: Text(videoUrl,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: p.subtext)),
+              ),
+              Divider(height: 10, color: p.border),
+              ListTile(
+                title: Text('Open video in new tab',
+                    style: TextStyle(color: p.text)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _createNewTab(incognito: _isIncognito, url: videoUrl);
+                },
+              ),
+              ListTile(
+                title: Text('Download video', style: TextStyle(color: p.text)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _triggerRealFileDownload(videoUrl, forceCategory: 'Videos');
+                },
+              ),
+              ListTile(
+                title: Text('Copy video address',
+                    style: TextStyle(color: p.text)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Clipboard.setData(ClipboardData(text: videoUrl));
+                  _showToast('Video address copied');
+                },
+              ),
+              ListTile(
+                title: Text('Share video', style: TextStyle(color: p.text)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openChromeShareSheet(
+                      overrideUrl: videoUrl, overrideTitle: title);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+
+  
 
   void _openImageLongPressDialog(String imageUrl, String altText) {
     final p = ChromePalette.of(context, incognito: _isIncognito);
@@ -1985,13 +2339,12 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     );
   }
 
-  Future<void> _openDownloadEntry(DownloadEntry entry) async {
+    Future<void> _openDownloadEntry(DownloadEntry entry) async {
     if (entry.isInProgress) {
       _showToast('Downloading: ${entry.sizeLabel}');
       return;
     }
 
-    // 1. Images open directly inside Study Browser's built-in Chrome-style viewer!
     if (entry.category == 'Images') {
       _openInAppImageViewer(
         title: entry.title,
@@ -2001,15 +2354,36 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       return;
     }
 
-    // 2. Saved web pages open directly inside Study Browser!
     if (entry.category == 'Pages') {
+      if (entry.filePath.isNotEmpty && File(entry.filePath).existsSync()) {
+        setState(() {
+          _isPageBlocked = false;
+          _pageTitle = entry.title;
+          _currentUrl =
+              entry.url.isNotEmpty ? entry.url : 'file://${entry.filePath}';
+          _urlController.text = _currentUrl;
+        });
+        await _webController.loadFile(entry.filePath);
+        return;
+      }
       if (entry.url.isNotEmpty) {
         _loadFromSearchBar(entry.url);
         return;
       }
     }
 
-    // 3. Unsupported binary files (.zip, .pdf, .apk, .mp4) show Android "Open with" chooser popup
+    final isPdf = entry.title.toLowerCase().endsWith('.pdf') ||
+        entry.filePath.toLowerCase().endsWith('.pdf') ||
+        entry.url.toLowerCase().split('?').first.endsWith('.pdf');
+    if (isPdf && entry.url.isNotEmpty) {
+      _openInAppPdfViewer(
+        pdfUrl: entry.url,
+        title: entry.title,
+        localFilePath: entry.filePath,
+      );
+      return;
+    }
+
     final ok = await _intentChannel.invokeMethod<bool>('openWithSystem', {
       'filePath': entry.filePath,
       'url': entry.url,
@@ -2018,6 +2392,33 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       _loadFromSearchBar(entry.url);
     }
   }
+
+  void _openInAppPdfViewer({
+    required String pdfUrl,
+    String? title,
+    String? localFilePath,
+  }) {
+    final cleanName = (title != null && title.isNotEmpty)
+        ? title
+        : Uri.decodeComponent(pdfUrl.split('/').last.split('?').first);
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _InAppPdfViewerPage(
+          title: cleanName.isNotEmpty ? cleanName : 'PDF Document',
+          pdfUrl: pdfUrl,
+          localFilePath: localFilePath,
+          onDownload: () => _triggerRealFileDownload(pdfUrl),
+          onOpenExternal: () {
+            _intentChannel.invokeMethod('openWithSystem', {
+              'filePath': localFilePath ?? '',
+              'url': pdfUrl,
+            });
+          },
+        ),
+      ),
+    );
+  }
+
 
   // ===========================================================================
   // TAB SYNC, REAL THUMBNAILS, HISTORY & SECURITY ENGINE
@@ -2129,7 +2530,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   bool _evaluateUrl(String url, {bool showOverlayOnBlock = true}) {
-    if (url == 'about:blank') return true;
+      if (url == 'about:blank' || url == _ntpUrl) return true;
     final uri = Uri.tryParse(url);
     if (uri == null) return true;
     final scheme = uri.scheme.toLowerCase();
@@ -2261,6 +2662,22 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   void _loadFromSearchBar(String input) {
     final trimmed = input.trim();
     if (trimmed.isEmpty) return;
+          _webController.loadRequest(Uri.parse('about:blank'));
+
+      if (trimmed == _ntpUrl) {
+    setState(() {
+      _currentUrl = _ntpUrl;
+      _pageTitle = _isIncognito ? 'Incognito Tab' : 'New Tab';
+      _urlController.text = '';
+      _isPageBlocked = false;
+      _isReadingMode = false;
+      _loadingProgress = 100;
+      _syncActiveTab(
+          title: _isIncognito ? 'Incognito Tab' : 'New Tab', url: _ntpUrl);
+    });
+    return;
+  }
+
         if (_matchesSystemPolicy(trimmed, trimmed)) {
       setState(() {
         _isPageBlocked = true;
@@ -2452,7 +2869,8 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     String? groupId,
   }) async {
     await _captureCurrentTabThumbnail();
-    final target = url ?? _homepageUrl;
+      final target = url ?? _ntpUrl;
+
     final newTab = BrowserTab(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       title: incognito ? 'Incognito Tab' : 'New Tab',
@@ -2629,8 +3047,72 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     return false;
   }
 
+  Widget _buildSiteFavicon(
+    String url,
+    ChromePalette p, {
+    double iconSize = 20,
+    double boxSize = 36,
+    IconData fallbackIcon = Icons.public,
+  }) {
+    final normalized =
+        url.startsWith('http') ? url : (url.contains('.') ? 'https://$url' : '');
+    final host = Uri.tryParse(normalized)?.host.replaceAll('www.', '') ?? '';
+
+    Widget fallback() => Container(
+          width: boxSize,
+          height: boxSize,
+          decoration: BoxDecoration(
+            color: p.surfaceVariant,
+            shape: BoxShape.circle,
+          ),
+          alignment: Alignment.center,
+          child: host.isNotEmpty
+              ? Text(
+                  host[0].toUpperCase(),
+                  style: TextStyle(
+                    color: p.accent,
+                    fontWeight: FontWeight.bold,
+                    fontSize: iconSize * 0.78,
+                  ),
+                )
+              : Icon(fallbackIcon, size: iconSize, color: p.subtext),
+        );
+
+    if (host.isEmpty || host == 'about:blank') return fallback();
+
+    final favUrl =
+        'https://www.google.com/s2/favicons?domain=${Uri.encodeComponent(host)}&sz=64';
+
+    return Container(
+      width: boxSize,
+      height: boxSize,
+      decoration: BoxDecoration(
+        color: p.surfaceVariant,
+        shape: BoxShape.circle,
+      ),
+      alignment: Alignment.center,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(boxSize / 2),
+        child: Image.network(
+          favUrl,
+          width: iconSize,
+          height: iconSize,
+          fit: BoxFit.contain,
+          errorBuilder: (_, __, ___) => Icon(
+            fallbackIcon,
+            size: iconSize * 0.9,
+            color: p.accent,
+          ),
+        ),
+      ),
+    );
+  }
+
+
   String _formatDisplayUrl(String url) {
-    if (url.isEmpty || url == 'about:blank') return 'Search or type URL';
+      if (url.isEmpty || url == 'about:blank' || url == _ntpUrl) {
+    return 'Search or type URL';
+  }
     return url
         .replaceFirst(RegExp(r'^https?://'), '')
         .replaceFirst(RegExp(r'^www\.'), '');
@@ -2690,10 +3172,12 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         .take(8)
                         .toList();
 
-                final showCurrentPageRow = _currentUrl.isNotEmpty &&
+                                final showCurrentPageRow = _currentUrl.isNotEmpty &&
                     _currentUrl != 'about:blank' &&
+                    _currentUrl != _ntpUrl &&
                     !_isUrlPermanentlyBlocked(_currentUrl) &&
                     (q.isEmpty || q == _currentUrl);
+
 
                 return Scaffold(
                   backgroundColor: p.bg,
@@ -2929,21 +3413,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                             mainAxisAlignment:
                                                 MainAxisAlignment.center,
                                             children: [
-                                              CircleAvatar(
-                                                radius: 22,
-                                                backgroundColor:
-                                                    p.surfaceVariant,
-                                                child: Text(
-                                                  host.isNotEmpty
-                                                      ? host[0].toUpperCase()
-                                                      : 'W',
-                                                  style: TextStyle(
-                                                    color: p.accent,
-                                                    fontWeight: FontWeight.bold,
-                                                    fontSize: 16,
-                                                  ),
-                                                ),
-                                              ),
+                                                                                            _buildSiteFavicon(bm.url, p,
+                                                  boxSize: 44, iconSize: 24),
+
                                               const SizedBox(height: 6),
                                               Text(
                                                 bm.title,
@@ -4080,17 +4552,19 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     if (!mounted) return;
 
     String searchQuery = '';
-    bool showIncognitoOnly = _isIncognito;
+    int activeSegment = _isIncognito ? 1 : 0; // 0 = Tabs, 1 = Incognito, 2 = Groups
+    bool isSelecting = false;
+    final Set<String> selectedTabIds = {};
 
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (pageCtx) => StatefulBuilder(
           builder: (pageCtx, setGridState) {
-            final p =
-                ChromePalette.of(pageCtx, incognito: showIncognitoOnly);
+            final p = ChromePalette.of(pageCtx, incognito: activeSegment == 1);
 
             final filteredTabs = _tabs.where((t) {
-              if (t.isIncognito != showIncognitoOnly) return false;
+              if (activeSegment == 1 && !t.isIncognito) return false;
+              if (activeSegment == 0 && t.isIncognito) return false;
               if (searchQuery.trim().isNotEmpty) {
                 final q = searchQuery.toLowerCase();
                 return t.title.toLowerCase().contains(q) ||
@@ -4105,254 +4579,519 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                     !_tabGroups.any((g) => g.id == t.groupId))
                 .toList();
 
+            final visibleSelectableTabs =
+                activeSegment == 2 ? <BrowserTab>[] : ungroupedTabs;
+
             return Scaffold(
               backgroundColor: p.bg,
-              appBar: AppBar(
-                backgroundColor: p.bg,
-                foregroundColor: p.text,
-                elevation: 0,
-                automaticallyImplyLeading: false,
-                titleSpacing: 12,
-                title: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    // + New Tab Button
-                    InkWell(
-                      onTap: () {
-                        Navigator.pop(pageCtx);
-                        _createNewTab(incognito: showIncognitoOnly);
-                      },
-                      borderRadius: BorderRadius.circular(12),
-                      child: Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: p.accent,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(
-                          Icons.add,
-                          color: p.isDark
-                              ? const Color(0xFF1F1F1F)
-                              : Colors.white,
-                        ),
+              appBar: isSelecting
+                  ? AppBar(
+                      backgroundColor: p.surface,
+                      foregroundColor: p.text,
+                      leading: IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => setGridState(() {
+                          isSelecting = false;
+                          selectedTabIds.clear();
+                        }),
                       ),
-                    ),
-
-                    // Center Segmented Switcher ([ count ] | [ Incognito ])
-                    Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: p.surface,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: p.border),
+                      title: Text(
+                        selectedTabIds.isEmpty
+                            ? 'Select tabs'
+                            : '${selectedTabIds.length} selected',
+                        style: const TextStyle(
+                            fontSize: 17, fontWeight: FontWeight.w600),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
+                      actions: [
+                        IconButton(
+                          icon: const Icon(Icons.select_all),
+                          tooltip: 'Select all',
+                          onPressed: () {
+                            setGridState(() {
+                              if (selectedTabIds.length ==
+                                  visibleSelectableTabs.length) {
+                                selectedTabIds.clear();
+                              } else {
+                                selectedTabIds.addAll(
+                                    visibleSelectableTabs.map((e) => e.id));
+                              }
+                            });
+                          },
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.grid_view_outlined),
+                          tooltip: 'Group selected tabs',
+                          onPressed: selectedTabIds.isEmpty
+                              ? null
+                              : () {
+                                  final chosen = _tabs
+                                      .where((t) =>
+                                          selectedTabIds.contains(t.id))
+                                      .toList();
+                                  if (chosen.isEmpty) return;
+                                  final newGrp = BrowserTabGroup(
+                                    id: DateTime.now()
+                                        .millisecondsSinceEpoch
+                                        .toString(),
+                                    title: '${chosen.length} tabs',
+                                    colorValue: 0xFF3B82F6,
+                                  );
+                                  setState(() {
+                                    _tabGroups.add(newGrp);
+                                    for (final t in chosen) {
+                                      t.groupId = newGrp.id;
+                                    }
+                                  });
+                                  _saveData();
+                                  setGridState(() {
+                                    isSelecting = false;
+                                    selectedTabIds.clear();
+                                  });
+                                  _showToast(
+                                      '${chosen.length} tabs grouped');
+                                },
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline),
+                          tooltip: 'Close selected tabs',
+                          onPressed: selectedTabIds.isEmpty
+                              ? null
+                              : () {
+                                  final indices = <int>[];
+                                  for (int i = _tabs.length - 1; i >= 0; i--) {
+                                    if (selectedTabIds.contains(_tabs[i].id)) {
+                                      indices.add(i);
+                                    }
+                                  }
+                                  for (final idx in indices) {
+                                    _closeTab(idx);
+                                  }
+                                  setGridState(() {
+                                    isSelecting = false;
+                                    selectedTabIds.clear();
+                                  });
+                                },
+                        ),
+                        PopupMenuButton<String>(
+                          color: p.menuBg,
+                          icon: Icon(Icons.more_vert, color: p.text),
+                          onSelected: (val) async {
+                            final chosen = _tabs
+                                .where((t) => selectedTabIds.contains(t.id))
+                                .toList();
+                            if (chosen.isEmpty) return;
+                            if (val == 'bookmark') {
+                              setState(() {
+                                for (final t in chosen) {
+                                  if (t.url != _ntpUrl &&
+                                      !_bookmarks.any((b) => b.url == t.url)) {
+                                    _bookmarks.insert(
+                                        0,
+                                        BookmarkItem(
+                                            title: t.title, url: t.url));
+                                  }
+                                }
+                              });
+                              await _saveData();
+                              _showToast(
+                                  '${chosen.length} tabs bookmarked');
+                            } else if (val == 'share') {
+                              final joined = chosen
+                                  .where((t) => t.url != _ntpUrl)
+                                  .map((t) => '${t.title}\n${t.url}')
+                                  .join('\n\n');
+                              if (joined.isNotEmpty) {
+                                await _shareLinkViaApp(
+                                    joined, 'Shared tabs', 'more');
+                              }
+                            }
+                            setGridState(() {
+                              isSelecting = false;
+                              selectedTabIds.clear();
+                            });
+                          },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(
+                              value: 'bookmark',
+                              child: ListTile(
+                                dense: true,
+                                leading: Icon(Icons.bookmark_add_outlined),
+                                title: Text('Bookmark tabs'),
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'share',
+                              child: ListTile(
+                                dense: true,
+                                leading: Icon(Icons.share_outlined),
+                                title: Text('Share tabs'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    )
+                  : AppBar(
+                      backgroundColor: p.bg,
+                      foregroundColor: p.text,
+                      elevation: 0,
+                      automaticallyImplyLeading: false,
+                      titleSpacing: 12,
+                      title: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           InkWell(
-                            onTap: () =>
-                                setGridState(() => showIncognitoOnly = false),
-                            borderRadius: BorderRadius.circular(10),
+                            onTap: () {
+                              if (activeSegment == 2) {
+                                _promptCreateNewTabGroupDialog(setGridState);
+                              } else {
+                                Navigator.pop(pageCtx);
+                                _createNewTab(incognito: activeSegment == 1);
+                              }
+                            },
+                            borderRadius: BorderRadius.circular(12),
                             child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 14, vertical: 6),
+                              width: 40,
+                              height: 40,
                               decoration: BoxDecoration(
-                                color: !showIncognitoOnly
-                                    ? p.topIconBg
-                                    : Colors.transparent,
-                                borderRadius: BorderRadius.circular(10),
+                                color: p.accent,
+                                borderRadius: BorderRadius.circular(12),
                               ),
-                              child: Text(
-                                '${_tabs.where((t) => !t.isIncognito).length}',
-                                style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 14,
-                                    color: p.text),
+                              child: Icon(
+                                Icons.add,
+                                color: p.isDark
+                                    ? const Color(0xFF1F1F1F)
+                                    : Colors.white,
                               ),
                             ),
                           ),
-                          const SizedBox(width: 4),
-                          InkWell(
-                            onTap: () =>
-                                setGridState(() => showIncognitoOnly = true),
-                            borderRadius: BorderRadius.circular(10),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 14, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: showIncognitoOnly
-                                    ? p.topIconBg
-                                    : Colors.transparent,
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Icon(Icons.visibility_off_outlined,
-                                  size: 18, color: p.text),
+
+                          // 3-SEGMENT CHROME SWITCHER: [ Tabs ] | [ Incognito ] | [ Groups ]
+                          Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(
+                              color: p.surface,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: p.border),
                             ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                InkWell(
+                                  onTap: () =>
+                                      setGridState(() => activeSegment = 0),
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 13, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: activeSegment == 0
+                                          ? p.topIconBg
+                                          : Colors.transparent,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Text(
+                                      '${_tabs.where((t) => !t.isIncognito).length}',
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14,
+                                          color: p.text),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                InkWell(
+                                  onTap: () =>
+                                      setGridState(() => activeSegment = 1),
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 13, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: activeSegment == 1
+                                          ? p.topIconBg
+                                          : Colors.transparent,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Icon(Icons.visibility_off_outlined,
+                                        size: 18, color: p.text),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                InkWell(
+                                  onTap: () =>
+                                      setGridState(() => activeSegment = 2),
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 13, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: activeSegment == 2
+                                          ? p.topIconBg
+                                          : Colors.transparent,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Icon(Icons.grid_view_outlined,
+                                        size: 18, color: p.text),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                          PopupMenuButton<String>(
+                            color: p.menuBg,
+                            icon: Icon(Icons.more_vert, color: p.text),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
+                            onSelected: (val) {
+                              if (val == 'new_tab') {
+                                Navigator.pop(pageCtx);
+                                _createNewTab(incognito: false);
+                              } else if (val == 'new_incognito') {
+                                Navigator.pop(pageCtx);
+                                _createNewTab(incognito: true);
+                              } else if (val == 'new_group') {
+                                _promptCreateNewTabGroupDialog(setGridState);
+                              } else if (val == 'select_tabs') {
+                                setGridState(() {
+                                  if (activeSegment == 2) activeSegment = 0;
+                                  isSelecting = true;
+                                  selectedTabIds.clear();
+                                });
+                              } else if (val == 'close_all') {
+                                setState(() {
+                                  _tabs = [
+                                    BrowserTab(
+                                      id: DateTime.now()
+                                          .millisecondsSinceEpoch
+                                          .toString(),
+                                      title: 'New Tab',
+                                      url: _ntpUrl,
+                                    )
+                                  ];
+                                  _activeTabIndex = 0;
+                                  _isIncognito = false;
+                                });
+                                _saveData();
+                                Navigator.pop(pageCtx);
+                                _loadFromSearchBar(_ntpUrl);
+                              } else if (val == 'clear_data') {
+                                Navigator.pop(pageCtx);
+                                _openDeleteBrowsingDataDialog();
+                              } else if (val == 'settings') {
+                                Navigator.pop(pageCtx);
+                                _openFullScreenSettingsPage();
+                              }
+                            },
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(
+                                value: 'new_tab',
+                                child: ListTile(
+                                  dense: true,
+                                  leading: Icon(Icons.add_box_outlined),
+                                  title: Text('New tab'),
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'new_incognito',
+                                child: ListTile(
+                                  dense: true,
+                                  leading: Icon(Icons.visibility_off_outlined),
+                                  title: Text('New Incognito tab'),
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'new_group',
+                                child: ListTile(
+                                  dense: true,
+                                  leading: Icon(Icons.grid_view_outlined),
+                                  title: Text('New tab group'),
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'select_tabs',
+                                child: ListTile(
+                                  dense: true,
+                                  leading: Icon(Icons.check_box_outlined),
+                                  title: Text('Select tabs'),
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'close_all',
+                                child: ListTile(
+                                  dense: true,
+                                  leading: Icon(Icons.close_fullscreen),
+                                  title: Text('Close all tabs'),
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'clear_data',
+                                child: ListTile(
+                                  dense: true,
+                                  leading: Icon(Icons.delete_outline),
+                                  title: Text('Delete browsing data'),
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'settings',
+                                child: ListTile(
+                                  dense: true,
+                                  leading: Icon(Icons.settings_outlined),
+                                  title: Text('Settings'),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
                     ),
-
-                    // Right 3-Dot Menu
-                    PopupMenuButton<String>(
-                      color: p.menuBg,
-                      icon: Icon(Icons.more_vert, color: p.text),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14)),
-                      onSelected: (val) {
-                        if (val == 'new_tab') {
-                          Navigator.pop(pageCtx);
-                          _createNewTab(incognito: false);
-                        } else if (val == 'new_incognito') {
-                          Navigator.pop(pageCtx);
-                          _createNewTab(incognito: true);
-                        } else if (val == 'new_group') {
-                          _promptCreateNewTabGroupDialog(setGridState);
-                        } else if (val == 'close_all') {
-                          setState(() {
-                            _tabs = [
-                              BrowserTab(
-                                id: DateTime.now()
-                                    .millisecondsSinceEpoch
-                                    .toString(),
-                                title: 'New Tab',
-                                url: _homepageUrl,
-                              )
-                            ];
-                            _activeTabIndex = 0;
-                            _isIncognito = false;
-                          });
-                          _saveData();
-                          Navigator.pop(pageCtx);
-                          _loadFromSearchBar(_homepageUrl);
-                        } else if (val == 'clear_data') {
-                          Navigator.pop(pageCtx);
-                          _openDeleteBrowsingDataDialog();
-                        } else if (val == 'settings') {
-                          Navigator.pop(pageCtx);
-                          _openFullScreenSettingsPage();
-                        }
-                      },
-                      itemBuilder: (_) => const [
-                        PopupMenuItem(
-                          value: 'new_tab',
-                          child: ListTile(
-                            dense: true,
-                            leading: Icon(Icons.add_box_outlined),
-                            title: Text('New tab'),
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'new_incognito',
-                          child: ListTile(
-                            dense: true,
-                            leading: Icon(Icons.visibility_off_outlined),
-                            title: Text('New Incognito tab'),
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'new_group',
-                          child: ListTile(
-                            dense: true,
-                            leading: Icon(Icons.grid_view_outlined),
-                            title: Text('New tab group'),
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'close_all',
-                          child: ListTile(
-                            dense: true,
-                            leading: Icon(Icons.close_fullscreen),
-                            title: Text('Close all tabs'),
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'clear_data',
-                          child: ListTile(
-                            dense: true,
-                            leading: Icon(Icons.delete_outline),
-                            title: Text('Delete browsing data'),
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'settings',
-                          child: ListTile(
-                            dense: true,
-                            leading: Icon(Icons.settings_outlined),
-                            title: Text('Settings'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
               body: Column(
                 children: [
-                  Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    child: Container(
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: p.addressBar,
-                        borderRadius: BorderRadius.circular(22),
-                      ),
-                      child: TextField(
-                        style: TextStyle(color: p.text),
-                        onChanged: (v) => setGridState(() => searchQuery = v),
-                        decoration: InputDecoration(
-                          hintText: 'Search your tabs',
-                          hintStyle: TextStyle(color: p.subtext),
-                          prefixIcon:
-                              Icon(Icons.search, size: 20, color: p.subtext),
-                          border: InputBorder.none,
-                          contentPadding:
-                              const EdgeInsets.symmetric(vertical: 11),
+                  if (!isSelecting && activeSegment != 2)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 8),
+                      child: Container(
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: p.addressBar,
+                          borderRadius: BorderRadius.circular(22),
+                        ),
+                        child: TextField(
+                          style: TextStyle(color: p.text),
+                          onChanged: (v) =>
+                              setGridState(() => searchQuery = v),
+                          decoration: InputDecoration(
+                            hintText: 'Search your tabs',
+                            hintStyle: TextStyle(color: p.subtext),
+                            prefixIcon: Icon(Icons.search,
+                                size: 20, color: p.subtext),
+                            border: InputBorder.none,
+                            contentPadding:
+                                const EdgeInsets.symmetric(vertical: 11),
+                          ),
                         ),
                       ),
                     ),
-                  ),
                   Expanded(
-                    child: GridView.builder(
-                      padding: const EdgeInsets.all(12),
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 2,
-                        mainAxisSpacing: 12,
-                        crossAxisSpacing: 12,
-                        childAspectRatio: 0.76,
-                      ),
-                      itemCount: (!showIncognitoOnly ? _tabGroups.length : 0) +
-                          ungroupedTabs.length,
-                      itemBuilder: (_, idx) {
-                        final groupCount =
-                            !showIncognitoOnly ? _tabGroups.length : 0;
-                        if (idx < groupCount) {
-                          final group = _tabGroups[idx];
-                          final groupTabs = _tabs
-                              .where((t) => t.groupId == group.id)
-                              .toList();
-                          return _buildTabGroupGridCard(
-                            p: p,
-                            group: group,
-                            groupTabs: groupTabs,
-                            pageCtx: pageCtx,
-                            setGridState: setGridState,
-                          );
-                        }
-                        final tab = ungroupedTabs[idx - groupCount];
-                        final realIndex = _tabs.indexOf(tab);
-                        return _buildSingleTabGridCard(
-                          p: p,
-                          tab: tab,
-                          realIndex: realIndex,
-                          pageCtx: pageCtx,
-                          setGridState: setGridState,
-                        );
-                      },
-                    ),
+                    child: activeSegment == 2
+                        ? (_tabGroups.isEmpty
+                            ? Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.grid_view_outlined,
+                                        size: 54, color: p.subtext),
+                                    const SizedBox(height: 12),
+                                    Text('No tab groups yet',
+                                        style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w600,
+                                            color: p.text)),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'Group study tabs together to stay organized',
+                                      style: TextStyle(
+                                          fontSize: 13, color: p.subtext),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    FilledButton.tonalIcon(
+                                      icon: const Icon(Icons.add),
+                                      label: const Text('New tab group'),
+                                      onPressed: () =>
+                                          _promptCreateNewTabGroupDialog(
+                                              setGridState),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            : GridView.builder(
+                                padding: const EdgeInsets.all(12),
+                                gridDelegate:
+                                    const SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: 2,
+                                  mainAxisSpacing: 12,
+                                  crossAxisSpacing: 12,
+                                  childAspectRatio: 0.78,
+                                ),
+                                itemCount: _tabGroups.length,
+                                itemBuilder: (_, idx) {
+                                  final group = _tabGroups[idx];
+                                  final groupTabs = _tabs
+                                      .where((t) => t.groupId == group.id)
+                                      .toList();
+                                  return _buildTabGroupGridCard(
+                                    p: p,
+                                    group: group,
+                                    groupTabs: groupTabs,
+                                    pageCtx: pageCtx,
+                                    setGridState: setGridState,
+                                  );
+                                },
+                              ))
+                        : GridView.builder(
+                            padding: const EdgeInsets.all(12),
+                            gridDelegate:
+                                const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 2,
+                              mainAxisSpacing: 12,
+                              crossAxisSpacing: 12,
+                              childAspectRatio: 0.76,
+                            ),
+                            itemCount: ((activeSegment == 0 && !isSelecting)
+                                    ? _tabGroups.length
+                                    : 0) +
+                                ungroupedTabs.length,
+                            itemBuilder: (_, idx) {
+                              final groupCount =
+                                  (activeSegment == 0 && !isSelecting)
+                                      ? _tabGroups.length
+                                      : 0;
+                              if (idx < groupCount) {
+                                final group = _tabGroups[idx];
+                                final groupTabs = _tabs
+                                    .where((t) => t.groupId == group.id)
+                                    .toList();
+                                return _buildTabGroupGridCard(
+                                  p: p,
+                                  group: group,
+                                  groupTabs: groupTabs,
+                                  pageCtx: pageCtx,
+                                  setGridState: setGridState,
+                                );
+                              }
+                              final tab = ungroupedTabs[idx - groupCount];
+                              final realIndex = _tabs.indexOf(tab);
+                              final isChecked =
+                                  selectedTabIds.contains(tab.id);
+                              return _buildSingleTabGridCard(
+                                p: p,
+                                tab: tab,
+                                realIndex: realIndex,
+                                pageCtx: pageCtx,
+                                setGridState: setGridState,
+                                isSelecting: isSelecting,
+                                isChecked: isChecked,
+                                onToggleSelect: () {
+                                  setGridState(() {
+                                    if (isChecked) {
+                                      selectedTabIds.remove(tab.id);
+                                    } else {
+                                      selectedTabIds.add(tab.id);
+                                    }
+                                  });
+                                },
+                                onStartSelect: () {
+                                  HapticFeedback.mediumImpact();
+                                  setGridState(() {
+                                    isSelecting = true;
+                                    selectedTabIds.add(tab.id);
+                                  });
+                                },
+                              );
+                            },
+                          ),
                   ),
                 ],
               ),
@@ -4369,6 +5108,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     required int realIndex,
     required BuildContext pageCtx,
     required StateSetter setGridState,
+    bool isSelecting = false,
+    bool isChecked = false,
+    VoidCallback? onToggleSelect,
+    VoidCallback? onStartSelect,
   }) {
     final isSelected = realIndex == _activeTabIndex;
     final host = Uri.tryParse(tab.url)?.host.replaceAll('www.', '') ?? tab.url;
@@ -4378,16 +5121,25 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
 
     return GestureDetector(
       onTap: () {
-        Navigator.pop(pageCtx);
-        _switchToTab(realIndex);
+        if (isSelecting) {
+          onToggleSelect?.call();
+        } else {
+          Navigator.pop(pageCtx);
+          _switchToTab(realIndex);
+        }
       },
+      onLongPress: isSelecting ? null : onStartSelect,
       child: Container(
         decoration: BoxDecoration(
           color: p.card,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: isSelected ? p.accent : p.border,
-            width: isSelected ? 2 : 1,
+            color: (isSelecting && isChecked) || (!isSelecting && isSelected)
+                ? p.accent
+                : p.border,
+            width: (isSelecting && isChecked) || (!isSelecting && isSelected)
+                ? 2.2
+                : 1,
           ),
         ),
         child: Column(
@@ -4396,11 +5148,20 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
               padding: const EdgeInsets.fromLTRB(10, 6, 4, 4),
               child: Row(
                 children: [
-                  Icon(
-                    tab.isIncognito ? Icons.visibility_off : Icons.public,
-                    size: 15,
-                    color: p.accent,
-                  ),
+                  if (isSelecting)
+                    Icon(
+                      isChecked
+                          ? Icons.check_circle
+                          : Icons.radio_button_unchecked,
+                      size: 18,
+                      color: isChecked ? p.accent : p.subtext,
+                    )
+                  else
+                    tab.isIncognito
+                        ? Icon(Icons.visibility_off,
+                            size: 15, color: p.accent)
+                        : _buildSiteFavicon(tab.url, p,
+                            boxSize: 18, iconSize: 14),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
@@ -4413,38 +5174,40 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                           color: p.text),
                     ),
                   ),
-                  PopupMenuButton<String>(
-                    padding: EdgeInsets.zero,
-                    color: p.menuBg,
-                    icon: Icon(Icons.more_vert, size: 16, color: p.subtext),
-                    onSelected: (val) {
-                      if (val == 'group') {
-                        _promptMoveTabToGroup(tab, setGridState);
-                      } else if (val == 'share') {
-                        _shareLinkViaApp(tab.url, tab.title, 'more');
-                      }
-                    },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(
-                        value: 'group',
-                        child: Text('Add tab to group'),
-                      ),
-                      PopupMenuItem(
-                        value: 'share',
-                        child: Text('Share'),
-                      ),
-                    ],
-                  ),
-                  InkWell(
-                    onTap: () {
-                      _closeTab(realIndex);
-                      setGridState(() {});
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.all(4),
-                      child: Icon(Icons.close, size: 17, color: p.subtext),
+                  if (!isSelecting) ...[
+                    PopupMenuButton<String>(
+                      padding: EdgeInsets.zero,
+                      color: p.menuBg,
+                      icon: Icon(Icons.more_vert, size: 16, color: p.subtext),
+                      onSelected: (val) {
+                        if (val == 'group') {
+                          _promptMoveTabToGroup(tab, setGridState);
+                        } else if (val == 'share') {
+                          _shareLinkViaApp(tab.url, tab.title, 'more');
+                        }
+                      },
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(
+                          value: 'group',
+                          child: Text('Add tab to group'),
+                        ),
+                        PopupMenuItem(
+                          value: 'share',
+                          child: Text('Share'),
+                        ),
+                      ],
                     ),
-                  ),
+                    InkWell(
+                      onTap: () {
+                        _closeTab(realIndex);
+                        setGridState(() {});
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.all(4),
+                        child: Icon(Icons.close, size: 17, color: p.subtext),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -4473,6 +5236,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       ),
     );
   }
+
 
   Widget _buildTabCardFallbackBody(
       ChromePalette p, BrowserTab tab, String host) {
@@ -5073,7 +5837,13 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                             ),
                                           ],
                                         ),
-                                        onTap: () => _openDownloadEntry(item),
+                                                                                onTap: () {
+                                          if (item.category == 'Pages') {
+                                            Navigator.pop(pageCtx);
+                                          }
+                                          _openDownloadEntry(item);
+                                        },
+
                                         trailing: item.isInProgress
                                             ? IconButton(
                                                 icon: Icon(Icons.close,
@@ -5414,18 +6184,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                     ),
                                   ListTile(
                                     contentPadding: EdgeInsets.zero,
-                                    leading: CircleAvatar(
-                                      radius: 18,
-                                      backgroundColor: p.surfaceVariant,
-                                      child: Text(
-                                        host.isNotEmpty
-                                            ? host[0].toUpperCase()
-                                            : 'G',
-                                        style: TextStyle(
-                                            color: p.accent,
-                                            fontWeight: FontWeight.bold),
-                                      ),
-                                    ),
+                                                                       leading: _buildSiteFavicon(item.url, p,
+                                        boxSize: 36, iconSize: 20),
+
                                     title: Text(
                                       item.title,
                                       maxLines: 1,
@@ -5872,13 +6633,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                     : null,
                                 child: ListTile(
                                   dense: !_bookmarkVisualView,
-                                  leading: CircleAvatar(
-                                    radius: _bookmarkVisualView ? 20 : 16,
-                                    backgroundColor: p.surfaceVariant,
-                                    child: Icon(Icons.star,
-                                        color: p.accent,
-                                        size: _bookmarkVisualView ? 20 : 16),
+                                                                    leading: _buildSiteFavicon(
+                                    bm.url,
+                                    p,
+                                    boxSize: _bookmarkVisualView ? 40 : 32,
+                                    iconSize: _bookmarkVisualView ? 22 : 18,
+                                    fallbackIcon: Icons.star,
                                   ),
+
                                   title: Text(bm.title,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
@@ -7300,6 +8062,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
 
     return WillPopScope(
       onWillPop: () async {
+        
+                    if (_isVideoFullscreen) {
+        await _webController.runJavaScript(
+            'if(document.fullscreenElement) document.exitFullscreen(); else if(document.webkitExitFullscreen) document.webkitExitFullscreen();');
+        await _setVideoFullscreen(false);
+        return false;
+      }
+
         if (_showFindBar || _showZoomBar) {
           setState(() {
             _showFindBar = false;
@@ -7328,96 +8098,119 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           child: Column(
             children: [
               // TOP CHROME BAR
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                decoration: BoxDecoration(
-                  color: p.bg,
-                  border: Border(
-                    bottom: BorderSide(color: p.border, width: 0.8),
+              if (!_isVideoFullscreen)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: p.bg,
+                    border: Border(
+                      bottom: BorderSide(color: p.border, width: 0.8),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        icon:
+                            Icon(Icons.home_outlined, size: 22, color: p.text),
+                        tooltip: 'Home',
+                        onPressed: () => _loadFromSearchBar(
+                            _homepageUrl == 'https://www.google.com'
+                                ? _ntpUrl
+                                : _homepageUrl),
+                      ),
+                      Expanded(
+                        child: GestureDetector(
+                          onHorizontalDragEnd: (details) {
+                            final vx = details.primaryVelocity ?? 0;
+                            if (vx < -250 && _tabs.length > 1) {
+                              HapticFeedback.selectionClick();
+                              final next =
+                                  (_activeTabIndex + 1) % _tabs.length;
+                              _switchToTab(next);
+                            } else if (vx > 250 && _tabs.length > 1) {
+                              HapticFeedback.selectionClick();
+                              final prev =
+                                  (_activeTabIndex - 1 + _tabs.length) %
+                                      _tabs.length;
+                              _switchToTab(prev);
+                            }
+                          },
+                          child: InkWell(
+                            onTap: _openChromeAddressBarOverlay,
+                            borderRadius: BorderRadius.circular(22),
+                            child: Container(
+                              height: 40,
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 12),
+                              decoration: BoxDecoration(
+                                color: p.addressBar,
+                                borderRadius: BorderRadius.circular(22),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    _isIncognito
+                                        ? Icons.visibility_off_outlined
+                                        : Icons.lock_outline,
+                                    size: 16,
+                                    color: p.accent,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      _formatDisplayUrl(_currentUrl),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          fontSize: 14.5, color: p.text),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      // Tab Counter Box [ 1 ]
+                      InkWell(
+                        onTap: _openFullScreenTabSwitcher,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          width: 24,
+                          height: 24,
+                          margin: const EdgeInsets.symmetric(horizontal: 6),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            border: Border.all(color: p.text, width: 1.6),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            '${_tabs.length}',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.bold,
+                              color: p.text,
+                            ),
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.shield_outlined,
+                            size: 21, color: p.accent),
+                        tooltip: 'Focus & Lock Manager',
+                        onPressed: _openLockManagerSheet,
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.more_vert, size: 22, color: p.text),
+                        tooltip: 'More options',
+                        onPressed: _openChromeStyleMenu,
+                      ),
+                    ],
                   ),
                 ),
-                child: Row(
-                  children: [
-                    IconButton(
-                      icon: Icon(Icons.home_outlined, size: 22, color: p.text),
-                      tooltip: 'Home',
-                      onPressed: () => _loadFromSearchBar(_homepageUrl),
-                    ),
-                    Expanded(
-                      child: InkWell(
-                        onTap: _openChromeAddressBarOverlay,
-                        borderRadius: BorderRadius.circular(22),
-                        child: Container(
-                          height: 40,
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          decoration: BoxDecoration(
-                            color: p.addressBar,
-                            borderRadius: BorderRadius.circular(22),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                _isIncognito
-                                    ? Icons.visibility_off_outlined
-                                    : Icons.lock_outline,
-                                size: 16,
-                                color: p.accent,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  _formatDisplayUrl(_currentUrl),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style:
-                                      TextStyle(fontSize: 14.5, color: p.text),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    // Tab Counter Box [ 1 ]
-                    InkWell(
-                      onTap: _openFullScreenTabSwitcher,
-                      borderRadius: BorderRadius.circular(8),
-                      child: Container(
-                        width: 24,
-                        height: 24,
-                        margin: const EdgeInsets.symmetric(horizontal: 6),
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          border: Border.all(color: p.text, width: 1.6),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          '${_tabs.length}',
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.bold,
-                            color: p.text,
-                          ),
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.shield_outlined,
-                          size: 21, color: p.accent),
-                      tooltip: 'Focus & Lock Manager',
-                      onPressed: _openLockManagerSheet,
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.more_vert, size: 22, color: p.text),
-                      tooltip: 'More options',
-                      onPressed: _openChromeStyleMenu,
-                    ),
-                  ],
-                ),
-              ),
-  
+
  
               if (_showFindBar)
                 Container(
@@ -7469,6 +8262,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 child: Stack(
                   children: [
                     WebViewWidget(controller: _webController),
+                                        if (_currentUrl == _ntpUrl && !_isPageBlocked)
+                      _buildChromeNewTabPage(p),
+
 
                     if (_showZoomBar)
                       Positioned(
@@ -7580,6 +8376,309 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     );
   }
 
+  Future<void> _promptAddNewTabShortcut() async {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
+    final titleCtrl = TextEditingController();
+    final urlCtrl = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: p.menuBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Text('Add shortcut', style: TextStyle(color: p.text)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: titleCtrl,
+              decoration: const InputDecoration(labelText: 'Name (e.g. NCERT)'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: urlCtrl,
+              decoration:
+                  const InputDecoration(labelText: 'URL (e.g. ncert.nic.in)'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              var rawUrl = urlCtrl.text.trim();
+              if (rawUrl.isEmpty) return;
+              if (!rawUrl.startsWith('http://') &&
+                  !rawUrl.startsWith('https://')) {
+                rawUrl = 'https://$rawUrl';
+              }
+              final name = titleCtrl.text.trim().isNotEmpty
+                  ? titleCtrl.text.trim()
+                  : (Uri.tryParse(rawUrl)?.host.replaceAll('www.', '') ??
+                      rawUrl);
+              setState(() {
+                _bookmarks.insert(0, BookmarkItem(title: name, url: rawUrl));
+              });
+              await _saveData();
+              if (mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChromeNewTabPage(ChromePalette p) {
+    if (_isIncognito) {
+      return Container(
+        width: double.infinity,
+        color: p.bg,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(28, 56, 28, 32),
+          children: [
+            const Icon(Icons.visibility_off_outlined,
+                size: 64, color: Color(0xFFBDC1C6)),
+            const SizedBox(height: 20),
+            Text(
+              "You've gone Incognito",
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: 22, fontWeight: FontWeight.w600, color: p.text),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Pages you view in this tab will not appear in your browser history or search history, while your Focus & Lock shields stay active.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13.5, color: p.subtext, height: 1.5),
+            ),
+            const SizedBox(height: 28),
+            InkWell(
+              onTap: _openChromeAddressBarOverlay,
+              borderRadius: BorderRadius.circular(28),
+              child: Container(
+                height: 50,
+                padding: const EdgeInsets.symmetric(horizontal: 18),
+                decoration: BoxDecoration(
+                  color: p.addressBar,
+                  borderRadius: BorderRadius.circular(28),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.search, color: p.subtext),
+                    const SizedBox(width: 12),
+                    Text('Search or type URL',
+                        style: TextStyle(fontSize: 15.5, color: p.subtext)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final safeShortcuts = _bookmarks
+        .where((b) => !_isUrlPermanentlyBlocked(b.url))
+        .take(7)
+        .toList();
+
+    final recentVisited = _history
+        .where((h) => !_isUrlPermanentlyBlocked(h.url))
+        .take(4)
+        .toList();
+
+    return Container(
+      width: double.infinity,
+      color: p.bg,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 44, 20, 32),
+        children: [
+          // CHROME-STYLE GOOGLE WORDMARK
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: const [
+              Text('G',
+                  style: TextStyle(
+                      fontSize: 40,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF4285F4))),
+              Text('o',
+                  style: TextStyle(
+                      fontSize: 40,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFFEA4335))),
+              Text('o',
+                  style: TextStyle(
+                      fontSize: 40,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFFFBBC05))),
+              Text('g',
+                  style: TextStyle(
+                      fontSize: 40,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF4285F4))),
+              Text('l',
+                  style: TextStyle(
+                      fontSize: 40,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF34A853))),
+              Text('e',
+                  style: TextStyle(
+                      fontSize: 40,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFFEA4335))),
+            ],
+          ),
+          const SizedBox(height: 24),
+
+          // BIG CHROME SEARCH PILL
+          InkWell(
+            onTap: _openChromeAddressBarOverlay,
+            borderRadius: BorderRadius.circular(28),
+            child: Container(
+              height: 52,
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              decoration: BoxDecoration(
+                color: p.addressBar,
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(color: p.border.withAlpha(110)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.search, color: p.subtext, size: 22),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Search or type URL',
+                      style: TextStyle(fontSize: 16, color: p.subtext),
+                    ),
+                  ),
+                  Icon(Icons.shield_outlined, color: p.accent, size: 20),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 28),
+
+          // 4-COLUMN SHORTCUTS GRID WITH REAL FAVICONS
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 4,
+              mainAxisSpacing: 16,
+              crossAxisSpacing: 8,
+              childAspectRatio: 0.88,
+            ),
+            itemCount: safeShortcuts.length + 1,
+            itemBuilder: (_, idx) {
+              if (idx == safeShortcuts.length) {
+                return InkWell(
+                  onTap: _promptAddNewTabShortcut,
+                  borderRadius: BorderRadius.circular(14),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: p.surfaceVariant,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(Icons.add, color: p.text, size: 24),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Add',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 12, color: p.text),
+                      ),
+                    ],
+                  ),
+                );
+              }
+              final item = safeShortcuts[idx];
+              return InkWell(
+                onTap: () => _loadFromSearchBar(item.url),
+                onLongPress: () async {
+                  setState(() => _bookmarks.remove(item));
+                  await _saveData();
+                  _showToast('Shortcut removed');
+                },
+                borderRadius: BorderRadius.circular(14),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _buildSiteFavicon(item.url, p, boxSize: 48, iconSize: 26),
+                    const SizedBox(height: 6),
+                    Text(
+                      item.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 12, color: p.text),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+
+          if (recentVisited.isNotEmpty) ...[
+            const SizedBox(height: 26),
+            Text(
+              'Continue with these tabs',
+              style: TextStyle(
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w600,
+                  color: p.subtext),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              decoration: BoxDecoration(
+                color: p.card,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: p.border),
+              ),
+              child: Column(
+                children: recentVisited.map((h) {
+                  final host =
+                      Uri.tryParse(h.url)?.host.replaceAll('www.', '') ?? h.url;
+                  return ListTile(
+                    dense: true,
+                    leading: _buildSiteFavicon(h.url, p,
+                        boxSize: 34, iconSize: 18),
+                    title: Text(
+                      h.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w500,
+                          color: p.text),
+                    ),
+                    subtitle: Text(
+                      host,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 11.5, color: p.subtext),
+                    ),
+                    onTap: () => _loadFromSearchBar(h.url),
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildBlockedOverlay(ChromePalette p) {
     return Container(
       width: double.infinity,
@@ -7666,6 +8765,96 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 }
               },
             ),
+        ],
+      ),
+    );
+  }
+}
+
+
+class _InAppPdfViewerPage extends StatefulWidget {
+  final String title;
+  final String pdfUrl;
+  final String? localFilePath;
+  final VoidCallback onDownload;
+  final VoidCallback onOpenExternal;
+
+  const _InAppPdfViewerPage({
+    required this.title,
+    required this.pdfUrl,
+    this.localFilePath,
+    required this.onDownload,
+    required this.onOpenExternal,
+  });
+
+  @override
+  State<_InAppPdfViewerPage> createState() => _InAppPdfViewerPageState();
+}
+
+class _InAppPdfViewerPageState extends State<_InAppPdfViewerPage> {
+  late final WebViewController _pdfController;
+  int _progress = 0;
+
+  String get _viewerUrl =>
+      'https://docs.google.com/gview?embedded=true&url=${Uri.encodeComponent(widget.pdfUrl)}';
+
+  @override
+  void initState() {
+    super.initState();
+    _pdfController = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onProgress: (p) {
+            if (mounted) setState(() => _progress = p);
+          },
+        ),
+      )
+      ..loadRequest(Uri.parse(_viewerUrl));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = ChromePalette.of(context);
+    return Scaffold(
+      backgroundColor: p.bg,
+      appBar: AppBar(
+        backgroundColor: p.bg,
+        foregroundColor: p.text,
+        title: Text(
+          widget.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Reload PDF',
+            onPressed: () => _pdfController.loadRequest(Uri.parse(_viewerUrl)),
+          ),
+          IconButton(
+            icon: const Icon(Icons.download_outlined),
+            tooltip: 'Download PDF',
+            onPressed: widget.onDownload,
+          ),
+          IconButton(
+            icon: const Icon(Icons.open_in_new),
+            tooltip: 'Open with other app',
+            onPressed: widget.onOpenExternal,
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          if (_progress < 100)
+            LinearProgressIndicator(
+              value: _progress / 100.0,
+              minHeight: 2.5,
+              color: p.accent,
+              backgroundColor: Colors.transparent,
+            ),
+          Expanded(child: WebViewWidget(controller: _pdfController)),
         ],
       ),
     );
