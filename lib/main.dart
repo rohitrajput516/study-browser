@@ -3178,7 +3178,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                     !_isUrlPermanentlyBlocked(_currentUrl) &&
                     (q.isEmpty || q == _currentUrl);
 
-
                 return Scaffold(
                   backgroundColor: p.bg,
                   body: SafeArea(
