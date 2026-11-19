@@ -32,7 +32,7 @@ jobs:
           mv pubspec.yaml.bak pubspec.yaml
           mv main.dart.bak lib/main.dart
 
-      - name: Set Custom App Logo (Error-Free Auto Resizer)
+      - name: Set Custom App Logo (Adaptive Clean Icon)
         run: |
           sudo apt-get update && sudo apt-get install -y python3-pil
           python3 - << 'EOF'
@@ -46,32 +46,92 @@ jobs:
                   break
 
           if logo_file:
-              print(f"Applying custom logo from: {logo_file}")
-              img = Image.open(logo_file).convert("RGBA")
-              sizes = {
+              print(f"Applying clean adaptive logo from: {logo_file}")
+              orig = Image.open(logo_file).convert("RGBA")
+
+              # बाहर की फालतू सफ़ेद/खाली जगह को सटीकता से क्रॉप करना
+              white_check = Image.new("RGBA", orig.size, (255, 255, 255, 255))
+              white_check.alpha_composite(orig)
+              mask = white_check.convert("L").point(lambda v: 255 if v < 245 else 0)
+              bbox = mask.getbbox()
+              cropped = orig.crop(bbox) if bbox else orig
+
+              # Adaptive Background (432x432) — साफ़ सफ़ेद बैकग्राउंड
+              bg_master = Image.new("RGBA", (432, 432), (255, 255, 255, 255))
+
+              # Adaptive Foreground (432x432) — बीच में बड़ा और साफ़ लोगो (Safe Zone में)
+              fg_master = Image.new("RGBA", (432, 432), (0, 0, 0, 0))
+              cw, ch = cropped.size
+              scale = 286.0 / max(cw, ch)
+              nw, nh = max(1, int(cw * scale)), max(1, int(ch * scale))
+              fg_resized = cropped.resize((nw, nh), Image.Resampling.LANCZOS)
+              fg_master.paste(fg_resized, ((432 - nw) // 2, (432 - nh) // 2), fg_resized)
+
+              # Legacy Icon (शॉर्टकट और पुराने व्यू के लिए)
+              legacy_combined = bg_master.copy()
+              legacy_combined.alpha_composite(fg_master)
+              legacy_cropped = legacy_combined.crop((66, 66, 366, 366))
+
+              res_dir = 'android/app/src/main/res'
+              adaptive_sizes = {
+                  'mipmap-mdpi': 108,
+                  'mipmap-hdpi': 162,
+                  'mipmap-xhdpi': 216,
+                  'mipmap-xxhdpi': 324,
+                  'mipmap-xxxhdpi': 432,
+              }
+              legacy_sizes = {
                   'mipmap-mdpi': 48,
                   'mipmap-hdpi': 72,
                   'mipmap-xhdpi': 96,
                   'mipmap-xxhdpi': 144,
                   'mipmap-xxxhdpi': 192,
               }
-              res_dir = 'android/app/src/main/res'
-              for folder, size in sizes.items():
+
+              for folder, size in adaptive_sizes.items():
                   out_dir = os.path.join(res_dir, folder)
                   os.makedirs(out_dir, exist_ok=True)
-                  resized = img.resize((size, size), Image.Resampling.LANCZOS)
-                  resized.save(os.path.join(out_dir, 'ic_launcher.png'), format='PNG')
-              print("All mipmap icons updated successfully!")
+                  bg_master.resize((size, size), Image.Resampling.LANCZOS).save(
+                      os.path.join(out_dir, 'ic_launcher_background.png'), format='PNG'
+                  )
+                  fg_master.resize((size, size), Image.Resampling.LANCZOS).save(
+                      os.path.join(out_dir, 'ic_launcher_foreground.png'), format='PNG'
+                  )
+                  l_size = legacy_sizes[folder]
+                  legacy_cropped.resize((l_size, l_size), Image.Resampling.LANCZOS).save(
+                      os.path.join(out_dir, 'ic_launcher.png'), format='PNG'
+                  )
+
+              anydpi_dir = os.path.join(res_dir, 'mipmap-anydpi-v26')
+              os.makedirs(anydpi_dir, exist_ok=True)
+              xml_content = (
+                  '<?xml version="1.0" encoding="utf-8"?>\n'
+                  '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
+                  '    <background android:drawable="@mipmap/ic_launcher_background" />\n'
+                  '    <foreground android:drawable="@mipmap/ic_launcher_foreground" />\n'
+                  '</adaptive-icon>\n'
+              )
+              with open(os.path.join(anydpi_dir, 'ic_launcher.xml'), 'w') as f:
+                  f.write(xml_content)
+              print("Clean adaptive icons generated successfully!")
           else:
               print("No logo.png found in root folder, keeping default icon.")
           EOF
 
-          if [ -f "logo.png" ] || [ -f "logo.jpg" ] || [ -f "logo.jpeg" ]; then
-            rm -rf android/app/src/main/res/mipmap-anydpi-v26
-          fi
 
-      - name: Configure Default Browser Manifest & Native Chrome Helper Bridge
+      - name: Configure Default Browser Manifest, FileProvider & Native Chrome Bridge
         run: |
+          mkdir -p android/app/src/main/res/xml
+          cat << 'EOF' > android/app/src/main/res/xml/file_paths.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <paths>
+              <external-path name="external_files" path="." />
+              <external-files-path name="external_app_files" path="." />
+              <cache-path name="cache_files" path="." />
+              <files-path name="internal_files" path="." />
+          </paths>
+          EOF
+
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -87,6 +147,16 @@ jobs:
                   android:icon="@mipmap/ic_launcher"
                   android:usesCleartextTraffic="true"
                   android:requestLegacyExternalStorage="true">
+
+                  <provider
+                      android:name="androidx.core.content.FileProvider"
+                      android:authorities="${applicationId}.fileprovider"
+                      android:exported="false"
+                      android:grantUriPermissions="true">
+                      <meta-data
+                          android:name="android.support.FILE_PROVIDER_PATHS"
+                          android:resource="@xml/file_paths" />
+                  </provider>
 
                   <activity
                       android:name=".MainActivity"
@@ -147,10 +217,14 @@ jobs:
           package com.vajra.studybrowser.study_browser
 
           import android.app.DownloadManager
+          import android.content.ClipData
+          import android.content.ClipboardManager
           import android.content.Context
           import android.content.Intent
           import android.content.pm.ShortcutInfo
           import android.content.pm.ShortcutManager
+          import android.graphics.Bitmap
+          import android.graphics.Canvas
           import android.graphics.drawable.Icon
           import android.net.Uri
           import android.os.Build
@@ -158,7 +232,6 @@ jobs:
           import android.os.Handler
           import android.os.Looper
           import android.os.StatFs
-          import android.os.StrictMode
           import android.print.PrintAttributes
           import android.print.PrintManager
           import android.provider.Settings
@@ -167,15 +240,21 @@ jobs:
           import android.webkit.MimeTypeMap
           import android.webkit.URLUtil
           import android.webkit.WebView
+          import androidx.core.content.FileProvider
           import io.flutter.embedding.android.FlutterActivity
           import io.flutter.embedding.engine.FlutterEngine
           import io.flutter.plugin.common.MethodChannel
           import java.io.File
+          import java.io.FileOutputStream
+          import java.net.HttpURLConnection
+          import java.net.URL
           import java.util.Locale
+          import java.util.concurrent.Executors
 
           class MainActivity: FlutterActivity() {
               private var intentChannel: MethodChannel? = null
               private val mainHandler = Handler(Looper.getMainLooper())
+              private val ioExecutor = Executors.newCachedThreadPool()
 
               private fun extractUrlFromIntent(targetIntent: Intent?): String? {
                   if (targetIntent == null) return null
@@ -214,6 +293,59 @@ jobs:
                   }
               }
 
+              private fun applyWebViewDarkening(isDark: Boolean) {
+                  val webViews = mutableListOf<WebView>()
+                  findAllWebViews(window?.decorView, webViews)
+                  for (wv in webViews) {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                          wv.settings.isAlgorithmicDarkeningAllowed = isDark
+                      }
+                  }
+              }
+
+              private fun formatBytes(bytes: Long): String {
+                  if (bytes <= 0L) return "0 B"
+                  return when {
+                      bytes >= 1024L * 1024L * 1024L ->
+                          String.format(Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+                      bytes >= 1024L * 1024L ->
+                          String.format(Locale.US, "%.2f MB", bytes / (1024.0 * 1024.0))
+                      bytes >= 1024L ->
+                          String.format(Locale.US, "%.2f kB", bytes / 1024.0)
+                      else -> "$bytes B"
+                  }
+              }
+
+              private fun downloadUrlToCacheFile(imageUrl: String, fileName: String): File? {
+                  return try {
+                      val url = URL(imageUrl)
+                      val conn = (url.openConnection() as HttpURLConnection).apply {
+                          connectTimeout = 10000
+                          readTimeout = 15000
+                          instanceFollowRedirects = true
+                          setRequestProperty(
+                              "User-Agent",
+                              "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+                          )
+                      }
+                      conn.connect()
+                      val outFile = File(cacheDir, fileName)
+                      conn.inputStream.use { input ->
+                          FileOutputStream(outFile).use { output ->
+                              input.copyTo(output)
+                          }
+                      }
+                      conn.disconnect()
+                      outFile
+                  } catch (_: Exception) {
+                      null
+                  }
+              }
+
+              private fun getShareableUri(file: File): Uri {
+                  return FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+              }
+
               override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
                   super.configureFlutterEngine(flutterEngine)
                   val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "study_browser/intent")
@@ -233,6 +365,108 @@ jobs:
                               mainHandler.postDelayed({ applyDesktopSettingsToWebViews(isDesktop) }, 650)
                               result.success(true)
                           }
+                          "setWebViewDarkening" -> {
+                              val isDark = call.argument<Boolean>("isDark") ?: false
+                              applyWebViewDarkening(isDark)
+                              result.success(true)
+                          }
+                          "captureWebViewThumbnail" -> {
+                              val tabId = call.argument<String>("tabId") ?: "tab"
+                              try {
+                                  val webViews = mutableListOf<WebView>()
+                                  findAllWebViews(window?.decorView, webViews)
+                                  val wv = webViews.firstOrNull()
+                                  if (wv != null && wv.width > 0 && wv.height > 0) {
+                                      val targetW = 360
+                                      val scale = targetW.toFloat() / wv.width.toFloat()
+                                      val targetH = (wv.height * scale).toInt().coerceIn(220, 640)
+                                      val bmp = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.RGB_565)
+                                      val canvas = Canvas(bmp)
+                                      canvas.scale(scale, scale)
+                                      canvas.translate(-wv.scrollX.toFloat(), -wv.scrollY.toFloat())
+                                      wv.draw(canvas)
+                                      val safeId = tabId.replace(Regex("[^a-zA-Z0-9_]"), "")
+                                      val thumbFile = File(cacheDir, "thumb_$safeId.jpg")
+                                      FileOutputStream(thumbFile).use { fos ->
+                                          bmp.compress(Bitmap.CompressFormat.JPEG, 72, fos)
+                                      }
+                                      bmp.recycle()
+                                      result.success(thumbFile.absolutePath)
+                                  } else {
+                                      result.success(null)
+                                  }
+                              } catch (_: Exception) {
+                                  result.success(null)
+                              }
+                          }
+                          "copyImageToClipboard" -> {
+                              val imageUrl = call.argument<String>("url") ?: ""
+                              if (imageUrl.isBlank()) {
+                                  result.success(false)
+                                  return@setMethodCallHandler
+                              }
+                              ioExecutor.execute {
+                                  val file = downloadUrlToCacheFile(imageUrl, "copied_image_${System.currentTimeMillis()}.jpg")
+                                  mainHandler.post {
+                                      try {
+                                          if (file != null && file.exists()) {
+                                              val uri = getShareableUri(file)
+                                              val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                              val clip = ClipData.newUri(contentResolver, "Image", uri)
+                                              cm.setPrimaryClip(clip)
+                                              result.success(true)
+                                          } else {
+                                              val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                              cm.setPrimaryClip(ClipData.newPlainText("Image URL", imageUrl))
+                                              result.success(false)
+                                          }
+                                      } catch (_: Exception) {
+                                          result.success(false)
+                                      }
+                                  }
+                              }
+                          }
+                          "shareImage" -> {
+                              val imageUrl = call.argument<String>("url") ?: ""
+                              val pkg = call.argument<String>("package")
+                              if (imageUrl.isBlank()) {
+                                  result.success(false)
+                                  return@setMethodCallHandler
+                              }
+                              ioExecutor.execute {
+                                  val file = downloadUrlToCacheFile(imageUrl, "shared_image_${System.currentTimeMillis()}.jpg")
+                                  mainHandler.post {
+                                      try {
+                                          if (file != null && file.exists()) {
+                                              val uri = getShareableUri(file)
+                                              val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                                  type = "image/*"
+                                                  putExtra(Intent.EXTRA_STREAM, uri)
+                                                  addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                              }
+                                              if (!pkg.isNullOrBlank()) {
+                                                  shareIntent.setPackage(pkg)
+                                                  try {
+                                                      startActivity(shareIntent)
+                                                      result.success(true)
+                                                      return@post
+                                                  } catch (_: Exception) {
+                                                      shareIntent.setPackage(null)
+                                                  }
+                                              }
+                                              val chooser = Intent.createChooser(shareIntent, "Share image")
+                                              chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                              startActivity(chooser)
+                                              result.success(true)
+                                          } else {
+                                              result.success(false)
+                                          }
+                                      } catch (_: Exception) {
+                                          result.success(false)
+                                      }
+                                  }
+                              }
+                          }
                           "shareLink" -> {
                               val url = call.argument<String>("url") ?: ""
                               val title = call.argument<String>("title") ?: "Share Link"
@@ -241,7 +475,7 @@ jobs:
                                   val sendIntent = Intent(Intent.ACTION_SEND).apply {
                                       type = "text/plain"
                                       putExtra(Intent.EXTRA_SUBJECT, title)
-                                      putExtra(Intent.EXTRA_TEXT, "$title\n$url")
+                                      putExtra(Intent.EXTRA_TEXT, if (title.isNotBlank() && title != url) "$title\n$url" else url)
                                   }
                                   if (!pkg.isNullOrBlank()) {
                                       sendIntent.setPackage(pkg)
@@ -257,7 +491,7 @@ jobs:
                                   chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                   startActivity(chooser)
                                   result.success(true)
-                              } catch (e: Exception) {
+                              } catch (_: Exception) {
                                   result.success(false)
                               }
                           }
@@ -296,7 +530,7 @@ jobs:
                                   }
                                   sendBroadcast(legacyIntent)
                                   result.success(true)
-                              } catch (e: Exception) {
+                              } catch (_: Exception) {
                                   result.success(false)
                               }
                           }
@@ -318,17 +552,113 @@ jobs:
                                       setAllowedOverRoaming(true)
                                       setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, guessedName)
                                   }
-                                  dm.enqueue(req)
+                                  val dlId = dm.enqueue(req)
                                   val pubDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                                   val targetFile = File(pubDir, guessedName)
                                   result.success(mapOf(
+                                      "downloadId" to dlId,
                                       "fileName" to guessedName,
                                       "filePath" to targetFile.absolutePath,
-                                      "sizeLabel" to "Downloading..."
+                                      "sizeLabel" to "Starting download..."
                                   ))
-                              } catch (e: Exception) {
+                              } catch (_: Exception) {
                                   result.success(null)
                               }
+                          }
+                          "getDownloadsProgress" -> {
+                              val rawIds = call.argument<List<Any>>("ids") ?: emptyList()
+                              val longIds = rawIds.mapNotNull { (it as? Number)?.toLong() }.filter { it > 0L }.toLongArray()
+                              val output = mutableMapOf<String, Map<String, Any>>()
+                              if (longIds.isNotEmpty()) {
+                                  try {
+                                      val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                                      val query = DownloadManager.Query().setFilterById(*longIds)
+                                      dm.query(query)?.use { cursor ->
+                                          val idxId = cursor.getColumnIndex(DownloadManager.COLUMN_ID)
+                                          val idxStatus = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                                          val idxSoFar = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                                          val idxTotal = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                                          val idxUri = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
+
+                                          while (cursor.moveToNext()) {
+                                              if (idxId < 0) continue
+                                              val id = cursor.getLong(idxId)
+                                              val statusCode = if (idxStatus >= 0) cursor.getInt(idxStatus) else DownloadManager.STATUS_RUNNING
+                                              val downloaded = if (idxSoFar >= 0) cursor.getLong(idxSoFar) else 0L
+                                              val total = if (idxTotal >= 0) cursor.getLong(idxTotal) else -1L
+                                              val localUriStr = if (idxUri >= 0) cursor.getString(idxUri) else null
+
+                                              val statusStr = when (statusCode) {
+                                                  DownloadManager.STATUS_SUCCESSFUL -> "successful"
+                                                  DownloadManager.STATUS_FAILED -> "failed"
+                                                  DownloadManager.STATUS_PAUSED -> "paused"
+                                                  DownloadManager.STATUS_PENDING -> "pending"
+                                                  else -> "running"
+                                              }
+
+                                              val progress = when {
+                                                  statusCode == DownloadManager.STATUS_SUCCESSFUL -> 1.0
+                                                  total > 0L -> (downloaded.toDouble() / total.toDouble()).coerceIn(0.0, 1.0)
+                                                  else -> -1.0
+                                              }
+
+                                              val sizeLabel = when {
+                                                  statusCode == DownloadManager.STATUS_SUCCESSFUL -> {
+                                                      val finalSize = if (total > 0L) total else downloaded
+                                                      formatBytes(finalSize)
+                                                  }
+                                                  statusCode == DownloadManager.STATUS_FAILED -> "Download failed"
+                                                  statusCode == DownloadManager.STATUS_PAUSED ->
+                                                      if (total > 0L) "Paused • ${formatBytes(downloaded)} / ${formatBytes(total)}" else "Paused"
+                                                  total > 0L -> {
+                                                      val pct = ((downloaded * 100L) / total).toInt().coerceIn(0, 100)
+                                                      "${formatBytes(downloaded)} / ${formatBytes(total)} ($pct%)"
+                                                  }
+                                                  downloaded > 0L -> "${formatBytes(downloaded)} downloaded..."
+                                                  else -> "Pending..."
+                                              }
+
+                                              var resolvedPath = ""
+                                              if (!localUriStr.isNullOrBlank()) {
+                                                  try {
+                                                      val parsed = Uri.parse(localUriStr)
+                                                      if (parsed.scheme == "file") {
+                                                          resolvedPath = parsed.path ?: ""
+                                                      }
+                                                  } catch (_: Exception) {}
+                                              }
+
+                                              output[id.toString()] = mapOf(
+                                                  "status" to statusStr,
+                                                  "bytesDownloaded" to downloaded,
+                                                  "totalBytes" to total,
+                                                  "progress" to progress,
+                                                  "sizeLabel" to sizeLabel,
+                                                  "localPath" to resolvedPath
+                                              )
+                                          }
+                                      }
+                                  } catch (_: Exception) {}
+                              }
+                              result.success(output)
+                          }
+                          "cancelDownload" -> {
+                              val idNum = call.argument<Number>("downloadId")?.toLong() ?: -1L
+                              if (idNum > 0L) {
+                                  try {
+                                      val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                                      dm.remove(idNum)
+                                      result.success(true)
+                                  } catch (_: Exception) {
+                                      result.success(false)
+                                  }
+                              } else {
+                                  result.success(false)
+                              }
+                          }
+                          "getDownloadLocation" -> {
+                              val pubDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                              result.success(pubDir.absolutePath)
                           }
                           "saveOfflinePage" -> {
                               val title = call.argument<String>("title") ?: "Offline_Page"
@@ -348,18 +678,13 @@ jobs:
                                       outFile.writeText(html, Charsets.UTF_8)
                                   }
                                   val bytes = outFile.length()
-                                  val sizeLabel = if (bytes >= 1024 * 1024) {
-                                      String.format(Locale.US, "%.2f MB", bytes / (1024.0 * 1024.0))
-                                  } else {
-                                      String.format(Locale.US, "%.2f kB", bytes / 1024.0)
-                                  }
                                   result.success(mapOf(
                                       "fileName" to outFile.name,
                                       "filePath" to outFile.absolutePath,
                                       "sizeBytes" to bytes,
-                                      "sizeLabel" to sizeLabel
+                                      "sizeLabel" to formatBytes(bytes)
                                   ))
-                              } catch (e: Exception) {
+                              } catch (_: Exception) {
                                   result.success(null)
                               }
                           }
@@ -367,24 +692,21 @@ jobs:
                               val filePath = call.argument<String>("filePath") ?: ""
                               val url = call.argument<String>("url") ?: ""
                               try {
-                                  val builder = StrictMode.VmPolicy.Builder()
-                                  StrictMode.setVmPolicy(builder.build())
-
                                   val file = File(filePath)
                                   val targetUri: Uri
                                   val mime: String
 
-                                  if (file.exists()) {
-                                      targetUri = Uri.fromFile(file)
+                                  if (filePath.isNotBlank() && file.exists()) {
+                                      targetUri = getShareableUri(file)
                                       val ext = file.extension.lowercase(Locale.US)
                                       mime = when (ext) {
                                           "pdf" -> "application/pdf"
                                           "zip" -> "application/zip"
                                           "apk" -> "application/vnd.android.package-archive"
                                           "html", "htm", "mhtml" -> "text/html"
-                                          "jpg", "jpeg", "png", "webp" -> "image/*"
-                                          "mp4", "mkv", "webm" -> "video/*"
-                                          "mp3", "wav", "m4a" -> "audio/*"
+                                          "jpg", "jpeg", "png", "webp", "gif" -> "image/*"
+                                          "mp4", "mkv", "webm", "3gp" -> "video/*"
+                                          "mp3", "wav", "m4a", "ogg" -> "audio/*"
                                           else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"
                                       }
                                   } else if (url.isNotBlank()) {
@@ -409,7 +731,7 @@ jobs:
                                   chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                   startActivity(chooser)
                                   result.success(true)
-                              } catch (e: Exception) {
+                              } catch (_: Exception) {
                                   result.success(false)
                               }
                           }

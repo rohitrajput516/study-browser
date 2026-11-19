@@ -1,11 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+
+final ValueNotifier<ThemeMode> appThemeModeNotifier =
+    ValueNotifier<ThemeMode>(ThemeMode.system);
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,20 +21,139 @@ class StudyBrowserApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Study Browser',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: const Color(0xFF12151C),
-        primaryColor: const Color(0xFFA8C7FA),
-        colorScheme: const ColorScheme.dark(
-          primary: Color(0xFFA8C7FA),
-          secondary: Color(0xFF8AB4F8),
-          surface: Color(0xFF1E232E),
-        ),
-        dividerColor: const Color(0xFF2D3343),
-      ),
-      home: const BrowserHomeScreen(),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: appThemeModeNotifier,
+      builder: (_, themeMode, __) {
+        return MaterialApp(
+          title: 'Study Browser',
+          debugShowCheckedModeBanner: false,
+          themeMode: themeMode,
+          theme: ThemeData(
+            useMaterial3: true,
+            brightness: Brightness.light,
+            scaffoldBackgroundColor: const Color(0xFFFFFFFF),
+            primaryColor: const Color(0xFF0B57D0),
+            colorScheme: const ColorScheme.light(
+              primary: Color(0xFF0B57D0),
+              secondary: Color(0xFF1A73E8),
+              surface: Color(0xFFF3F6FC),
+              onSurface: Color(0xFF1F1F1F),
+            ),
+            appBarTheme: const AppBarTheme(
+              backgroundColor: Color(0xFFFFFFFF),
+              foregroundColor: Color(0xFF1F1F1F),
+              elevation: 0,
+              scrolledUnderElevation: 0,
+            ),
+            dividerColor: const Color(0xFFE0E3E7),
+          ),
+          darkTheme: ThemeData(
+            useMaterial3: true,
+            brightness: Brightness.dark,
+            scaffoldBackgroundColor: const Color(0xFF1F1F1F),
+            primaryColor: const Color(0xFFA8C7FA),
+            colorScheme: const ColorScheme.dark(
+              primary: Color(0xFFA8C7FA),
+              secondary: Color(0xFF8AB4F8),
+              surface: Color(0xFF28292C),
+              onSurface: Color(0xFFE3E3E3),
+            ),
+            appBarTheme: const AppBarTheme(
+              backgroundColor: Color(0xFF1F1F1F),
+              foregroundColor: Color(0xFFE3E3E3),
+              elevation: 0,
+              scrolledUnderElevation: 0,
+            ),
+            dividerColor: const Color(0xFF3C4043),
+          ),
+          home: const BrowserHomeScreen(),
+        );
+      },
+    );
+  }
+}
+
+class ChromePalette {
+  final bool isDark;
+  final bool isIncognito;
+  final Color bg;
+  final Color surface;
+  final Color surfaceVariant;
+  final Color addressBar;
+  final Color card;
+  final Color border;
+  final Color text;
+  final Color subtext;
+  final Color accent;
+  final Color menuBg;
+  final Color topIconBg;
+
+  const ChromePalette({
+    required this.isDark,
+    required this.isIncognito,
+    required this.bg,
+    required this.surface,
+    required this.surfaceVariant,
+    required this.addressBar,
+    required this.card,
+    required this.border,
+    required this.text,
+    required this.subtext,
+    required this.accent,
+    required this.menuBg,
+    required this.topIconBg,
+  });
+
+  static ChromePalette of(BuildContext context, {bool incognito = false}) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    if (incognito) {
+      return const ChromePalette(
+        isDark: true,
+        isIncognito: true,
+        bg: Color(0xFF1F1F23),
+        surface: Color(0xFF28282E),
+        surfaceVariant: Color(0xFF32323A),
+        addressBar: Color(0xFF33333C),
+        card: Color(0xFF2A2A32),
+        border: Color(0xFF42424D),
+        text: Color(0xFFF1F3F4),
+        subtext: Color(0xFFBDC1C6),
+        accent: Color(0xFFA8C7FA),
+        menuBg: Color(0xFF2A2A32),
+        topIconBg: Color(0xFF383842),
+      );
+    }
+    if (dark) {
+      return const ChromePalette(
+        isDark: true,
+        isIncognito: false,
+        bg: Color(0xFF1F1F1F),
+        surface: Color(0xFF28292C),
+        surfaceVariant: Color(0xFF303134),
+        addressBar: Color(0xFF303134),
+        card: Color(0xFF28292C),
+        border: Color(0xFF3C4043),
+        text: Color(0xFFE3E3E3),
+        subtext: Color(0xFF9AA0A6),
+        accent: Color(0xFFA8C7FA),
+        menuBg: Color(0xFF2D2E31),
+        topIconBg: Color(0xFF3C4043),
+      );
+    }
+    return const ChromePalette(
+      isDark: false,
+      isIncognito: false,
+      bg: Color(0xFFFFFFFF),
+      surface: Color(0xFFF3F6FC),
+      surfaceVariant: Color(0xFFE9EEF6),
+      addressBar: Color(0xFFEDF2FA),
+      card: Color(0xFFF6F8FC),
+      border: Color(0xFFDDE3EA),
+      text: Color(0xFF1F1F1F),
+      subtext: Color(0xFF5F6368),
+      accent: Color(0xFF0B57D0),
+      menuBg: Color(0xFFFFFFFF),
+      topIconBg: Color(0xFFEEF3FA),
     );
   }
 }
@@ -89,14 +212,29 @@ class LockGroup {
 class BookmarkItem {
   String title;
   String url;
+  int createdAt;
+  bool isReadingList;
 
-  BookmarkItem({required this.title, required this.url});
+  BookmarkItem({
+    required this.title,
+    required this.url,
+    int? createdAt,
+    this.isReadingList = false,
+  }) : createdAt = createdAt ?? DateTime.now().millisecondsSinceEpoch;
 
-  Map<String, dynamic> toJson() => {'title': title, 'url': url};
+  Map<String, dynamic> toJson() => {
+        'title': title,
+        'url': url,
+        'createdAt': createdAt,
+        'isReadingList': isReadingList,
+      };
 
   factory BookmarkItem.fromJson(Map<String, dynamic> json) => BookmarkItem(
         title: (json['title'] ?? 'Bookmark').toString(),
         url: (json['url'] ?? 'https://www.google.com').toString(),
+        createdAt: (json['createdAt'] ?? DateTime.now().millisecondsSinceEpoch)
+            as int,
+        isReadingList: json['isReadingList'] == true,
       );
 }
 
@@ -105,19 +243,22 @@ class HistoryItem {
   String url;
   String timestamp;
   String dateGroup;
+  int visitEpochMs;
 
   HistoryItem({
     required this.title,
     required this.url,
     required this.timestamp,
     required this.dateGroup,
-  });
+    int? visitEpochMs,
+  }) : visitEpochMs = visitEpochMs ?? DateTime.now().millisecondsSinceEpoch;
 
   Map<String, dynamic> toJson() => {
         'title': title,
         'url': url,
         'timestamp': timestamp,
         'dateGroup': dateGroup,
+        'visitEpochMs': visitEpochMs,
       };
 
   factory HistoryItem.fromJson(Map<String, dynamic> json) => HistoryItem(
@@ -125,46 +266,71 @@ class HistoryItem {
         url: (json['url'] ?? '').toString(),
         timestamp: (json['timestamp'] ?? '').toString(),
         dateGroup: (json['dateGroup'] ?? 'Today').toString(),
+        visitEpochMs: (json['visitEpochMs'] ??
+            DateTime.now().millisecondsSinceEpoch) as int,
       );
 }
 
 class DownloadEntry {
   String id;
+  int downloadId;
   String title;
   String url;
   String filePath;
   String sizeLabel;
   String category; // Pages, Videos, Images, Other
   String dateLabel;
+  String status; // running, pending, paused, successful, failed
+  double progress; // 0.0..1.0, -1.0 indeterminate
+  int bytesDownloaded;
+  int totalBytes;
 
   DownloadEntry({
     required this.id,
+    this.downloadId = -1,
     required this.title,
     required this.url,
     required this.filePath,
     required this.sizeLabel,
     required this.category,
     required this.dateLabel,
+    this.status = 'successful',
+    this.progress = 1.0,
+    this.bytesDownloaded = 0,
+    this.totalBytes = 0,
   });
+
+  bool get isInProgress =>
+      status == 'running' || status == 'pending' || status == 'paused';
 
   Map<String, dynamic> toJson() => {
         'id': id,
+        'downloadId': downloadId,
         'title': title,
         'url': url,
         'filePath': filePath,
         'sizeLabel': sizeLabel,
         'category': category,
         'dateLabel': dateLabel,
+        'status': status,
+        'progress': progress,
+        'bytesDownloaded': bytesDownloaded,
+        'totalBytes': totalBytes,
       };
 
   factory DownloadEntry.fromJson(Map<String, dynamic> json) => DownloadEntry(
         id: (json['id'] ?? '').toString(),
+        downloadId: (json['downloadId'] ?? -1) as int,
         title: (json['title'] ?? 'Downloaded File').toString(),
         url: (json['url'] ?? '').toString(),
         filePath: (json['filePath'] ?? '').toString(),
-        sizeLabel: (json['sizeLabel'] ?? '1.12 MB').toString(),
+        sizeLabel: (json['sizeLabel'] ?? '0 B').toString(),
         category: (json['category'] ?? 'Other').toString(),
         dateLabel: (json['dateLabel'] ?? 'Today').toString(),
+        status: (json['status'] ?? 'successful').toString(),
+        progress: ((json['progress'] ?? 1.0) as num).toDouble(),
+        bytesDownloaded: (json['bytesDownloaded'] ?? 0) as int,
+        totalBytes: (json['totalBytes'] ?? 0) as int,
       );
 }
 
@@ -175,6 +341,7 @@ class BrowserTab {
   bool isIncognito;
   bool isDesktop;
   String? groupId;
+  String? thumbnailPath;
 
   BrowserTab({
     required this.id,
@@ -183,6 +350,7 @@ class BrowserTab {
     this.isIncognito = false,
     this.isDesktop = false,
     this.groupId,
+    this.thumbnailPath,
   });
 
   Map<String, dynamic> toJson() => {
@@ -192,6 +360,7 @@ class BrowserTab {
         'isIncognito': isIncognito,
         'isDesktop': isDesktop,
         'groupId': groupId,
+        'thumbnailPath': thumbnailPath,
       };
 
   factory BrowserTab.fromJson(Map<String, dynamic> json) => BrowserTab(
@@ -202,6 +371,7 @@ class BrowserTab {
         isIncognito: json['isIncognito'] == true,
         isDesktop: json['isDesktop'] == true,
         groupId: json['groupId']?.toString(),
+        thumbnailPath: json['thumbnailPath']?.toString(),
       );
 }
 
@@ -254,6 +424,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   final TextEditingController _findController = TextEditingController();
 
   Timer? _lockEnforcementTimer;
+  Timer? _downloadPollTimer;
   Timer? _zoomAutoHideTimer;
   bool _webViewReady = false;
 
@@ -261,7 +432,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   String _currentUrl = 'https://www.google.com';
   String _pageTitle = 'Google';
 
-  // Browser States
+  // Theme & Browser Preferences
+  String _themePreference = 'system'; // system, light, dark
+  bool _darkenWebsitesInDark = false;
   bool _isDesktopMode = false;
   bool _isIncognito = false;
   bool _isReadingMode = false;
@@ -270,10 +443,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   int _zoomPercent = 100;
   String _searchEngineUrl = 'https://www.google.com/search?q=';
   String _homepageUrl = 'https://www.google.com';
+  String _lastSharedApp = 'whatsapp'; // whatsapp, telegram, more
+  bool _bookmarkVisualView = true;
+  String _bookmarkSortOrder = 'manual'; // manual, newest, oldest, az, za
 
   List<BrowserTab> _tabs = [];
   List<BrowserTabGroup> _tabGroups = [];
   List<BrowserTab> _recentlyClosedTabs = [];
+  List<String> _recentSearches = [];
   int _activeTabIndex = 0;
 
   // Focus & Lock States
@@ -299,6 +476,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   List<BookmarkItem> _bookmarks = [];
   List<HistoryItem> _history = [];
   List<DownloadEntry> _downloads = [];
+  final ValueNotifier<int> _downloadsUpdateTick = ValueNotifier<int>(0);
 
   // Blocked Overlay State
   bool _isPageBlocked = false;
@@ -326,7 +504,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           if (vpMeta.getAttribute('content') !== desiredContent) {
             vpMeta.setAttribute('content', desiredContent);
           }
-          // Fallback if WebView layout width is still narrow
           if (window.innerWidth > 0 && window.innerWidth < 980 && document.documentElement) {
             document.documentElement.style.minWidth = '1280px';
           }
@@ -429,6 +606,79 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         }
       }
 
+      // 5. CHROME-STYLE IMAGE LONG-PRESS CONTEXT MENU DETECTOR
+      if (!window.__SB_IMG_LONGPRESS_SET) {
+        window.__SB_IMG_LONGPRESS_SET = true;
+        var lpTimer = null;
+        var lpStartX = 0;
+        var lpStartY = 0;
+
+        function findImageFromTarget(el) {
+          var curr = el;
+          for (var i = 0; i < 4 && curr; i++) {
+            if (curr.tagName && curr.tagName.toLowerCase() === 'img' && curr.src) {
+              return curr;
+            }
+            if (curr.querySelector) {
+              var nested = curr.querySelector('img');
+              if (nested && nested.src && curr.getBoundingClientRect().width < window.innerWidth * 1.05) {
+                if (el === curr || el.tagName === 'DIV') return nested;
+              }
+            }
+            curr = curr.parentElement;
+          }
+          return null;
+        }
+
+        document.addEventListener('contextmenu', function(e) {
+          var img = findImageFromTarget(e.target);
+          if (img && img.src && img.src.startsWith('http')) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.StudyBrowserBridge) {
+              window.StudyBrowserBridge.postMessage(JSON.stringify({
+                type: 'image_long_press',
+                src: img.currentSrc || img.src,
+                alt: img.alt || document.title || 'Image',
+                pageUrl: window.location.href
+              }));
+            }
+          }
+        }, true);
+
+        document.addEventListener('touchstart', function(e) {
+          if (e.touches.length !== 1) return;
+          var img = findImageFromTarget(e.target);
+          if (!img || !img.src || !img.src.startsWith('http')) return;
+          lpStartX = e.touches[0].clientX;
+          lpStartY = e.touches[0].clientY;
+          clearTimeout(lpTimer);
+          lpTimer = setTimeout(function() {
+            if (window.StudyBrowserBridge) {
+              window.StudyBrowserBridge.postMessage(JSON.stringify({
+                type: 'image_long_press',
+                src: img.currentSrc || img.src,
+                alt: img.alt || document.title || 'Image',
+                pageUrl: window.location.href
+              }));
+            }
+          }, 520);
+        }, { passive: true });
+
+        document.addEventListener('touchmove', function(e) {
+          if (!lpTimer || e.touches.length !== 1) return;
+          if (Math.abs(e.touches[0].clientX - lpStartX) > 14 || Math.abs(e.touches[0].clientY - lpStartY) > 14) {
+            clearTimeout(lpTimer);
+            lpTimer = null;
+          }
+        }, { passive: true });
+
+        document.addEventListener('touchend', function() {
+          clearTimeout(lpTimer);
+          lpTimer = null;
+        }, { passive: true });
+      }
+
       if (!window.__SB_INTERVAL_SET) {
         window.__SB_INTERVAL_SET = true;
         setInterval(applyRules, 350);
@@ -444,12 +694,15 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     _setupIntentListener();
     _bootBrowser();
     _startLockEnforcementTimer();
+    _startDownloadPollingTimer();
   }
 
   @override
   void dispose() {
     _lockEnforcementTimer?.cancel();
+    _downloadPollTimer?.cancel();
     _zoomAutoHideTimer?.cancel();
+    _downloadsUpdateTick.dispose();
     _urlController.dispose();
     _findController.dispose();
     super.dispose();
@@ -467,6 +720,68 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     });
   }
 
+  void _startDownloadPollingTimer() {
+    _downloadPollTimer =
+        Timer.periodic(const Duration(milliseconds: 800), (_) {
+      _pollActiveDownloads();
+    });
+  }
+
+  Future<void> _pollActiveDownloads() async {
+    final activeEntries =
+        _downloads.where((d) => d.downloadId > 0 && d.isInProgress).toList();
+    if (activeEntries.isEmpty) return;
+
+    try {
+      final ids = activeEntries.map((e) => e.downloadId).toList();
+      final res = await _intentChannel.invokeMethod('getDownloadsProgress', {
+        'ids': ids,
+      });
+      if (res is Map && mounted) {
+        bool changed = false;
+        DownloadEntry? newlyFinished;
+        for (final entry in activeEntries) {
+          final info = res[entry.downloadId.toString()];
+          if (info is Map) {
+            final newStatus = (info['status'] ?? entry.status).toString();
+            final newProgress =
+                ((info['progress'] ?? entry.progress) as num).toDouble();
+            final newSize = (info['sizeLabel'] ?? entry.sizeLabel).toString();
+            final newDown = (info['bytesDownloaded'] ?? 0) as int;
+            final newTotal = (info['totalBytes'] ?? 0) as int;
+            final localPath = (info['localPath'] ?? '').toString();
+
+            if (entry.status != newStatus ||
+                entry.sizeLabel != newSize ||
+                (entry.progress - newProgress).abs() > 0.005) {
+              final wasInProgress = entry.isInProgress;
+              entry.status = newStatus;
+              entry.progress = newProgress;
+              entry.sizeLabel = newSize;
+              entry.bytesDownloaded = newDown;
+              entry.totalBytes = newTotal;
+              if (localPath.isNotEmpty) {
+                entry.filePath = localPath;
+              }
+              changed = true;
+              if (wasInProgress && newStatus == 'successful') {
+                newlyFinished = entry;
+              }
+            }
+          }
+        }
+        if (changed) {
+          setState(() {});
+          _downloadsUpdateTick.value++;
+          await _saveData();
+          if (newlyFinished != null) {
+            _showDownloadBanner(newlyFinished);
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
   void _setupIntentListener() {
     _intentChannel.setMethodCallHandler((call) async {
       if (call.method == 'onNewIntentUrl') {
@@ -480,6 +795,8 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
 
   Future<void> _bootBrowser() async {
     await _loadSavedData();
+    _applyThemePreference(_themePreference, save: false);
+
     String? initialExternalUrl;
     try {
       initialExternalUrl =
@@ -508,6 +825,36 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       await _applyNativeDesktopViewport(_isDesktopMode);
       _loadFromSearchBar(activeTab.url);
     }
+  }
+
+  void _applyThemePreference(String pref, {bool save = true}) {
+    _themePreference = pref;
+    if (pref == 'light') {
+      appThemeModeNotifier.value = ThemeMode.light;
+    } else if (pref == 'dark') {
+      appThemeModeNotifier.value = ThemeMode.dark;
+    } else {
+      appThemeModeNotifier.value = ThemeMode.system;
+    }
+    _syncWebViewTheme();
+    if (save) _saveData();
+  }
+
+  Future<void> _syncWebViewTheme() async {
+    if (!mounted || !_webViewReady) return;
+    final platformDark =
+        WidgetsBinding.instance.platformDispatcher.platformBrightness ==
+            Brightness.dark;
+    final effectiveDark = _themePreference == 'dark' ||
+        (_themePreference == 'system' && platformDark);
+    await _webController.setBackgroundColor(
+      effectiveDark ? const Color(0xFF1F1F1F) : const Color(0xFFFFFFFF),
+    );
+    try {
+      await _intentChannel.invokeMethod('setWebViewDarkening', {
+        'isDark': effectiveDark && _darkenWebsitesInDark,
+      });
+    } catch (_) {}
   }
 
   Future<void> _applyNativeDesktopViewport(bool isDesktop) async {
@@ -573,6 +920,11 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
+      _themePreference = prefs.getString('themePreference') ?? 'system';
+      _darkenWebsitesInDark = prefs.getBool('darkenWebsitesInDark') ?? false;
+      _lastSharedApp = prefs.getString('lastSharedApp') ?? 'whatsapp';
+      _bookmarkVisualView = prefs.getBool('bookmarkVisualView') ?? true;
+      _bookmarkSortOrder = prefs.getString('bookmarkSortOrder') ?? 'manual';
       _blockYtShorts = prefs.getBool('blockYtShorts') ?? true;
       _hideYtFeed = prefs.getBool('hideYtFeed') ?? false;
       _blockIgReels = prefs.getBool('blockIgReels') ?? true;
@@ -589,7 +941,11 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         _whitelistedDomains = savedWhitelist;
       }
 
-      // Restore Saved Open Tabs & Tab Groups (So refreshing/killing app never loses tabs!)
+      final savedSearches = prefs.getStringList('recentSearches');
+      if (savedSearches != null) {
+        _recentSearches = savedSearches;
+      }
+
       final savedTabsJson = prefs.getString('savedBrowserTabs');
       if (savedTabsJson != null) {
         try {
@@ -701,6 +1057,11 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
 
   Future<void> _saveData() async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('themePreference', _themePreference);
+    await prefs.setBool('darkenWebsitesInDark', _darkenWebsitesInDark);
+    await prefs.setString('lastSharedApp', _lastSharedApp);
+    await prefs.setBool('bookmarkVisualView', _bookmarkVisualView);
+    await prefs.setString('bookmarkSortOrder', _bookmarkSortOrder);
     await prefs.setBool('blockYtShorts', _blockYtShorts);
     await prefs.setBool('hideYtFeed', _hideYtFeed);
     await prefs.setBool('blockIgReels', _blockIgReels);
@@ -710,6 +1071,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     await prefs.setString('homepageUrl', _homepageUrl);
     await prefs.setString('searchEngineUrl', _searchEngineUrl);
     await prefs.setStringList('whitelistedDomains', _whitelistedDomains);
+    await prefs.setStringList('recentSearches', _recentSearches);
     await prefs.setString(
       'savedBrowserTabs',
       jsonEncode(_tabs.map((t) => t.toJson()).toList()),
@@ -744,8 +1106,13 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   void _setupWebViewController() {
     _webController = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0xFF12151C))
       ..setUserAgent(_mobileUserAgent)
+      ..addJavaScriptChannel(
+        'StudyBrowserBridge',
+        onMessageReceived: (JavaScriptMessage msg) {
+          _handleJsBridgeMessage(msg.message);
+        },
+      )
       ..setNavigationDelegate(
         NavigationDelegate(
           onProgress: (progress) {
@@ -774,6 +1141,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           onPageFinished: (url) async {
             if (url == 'about:blank') return;
             await _applyNativeDesktopViewport(_isDesktopMode);
+            await _syncWebViewTheme();
             _injectFocusScripts();
             try {
               final titleObj = await _webController
@@ -790,6 +1158,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             } catch (_) {
               _recordHistory(url, url);
             }
+            Future.delayed(const Duration(milliseconds: 550), () {
+              if (mounted) _captureCurrentTabThumbnail();
+            });
           },
           onUrlChange: (change) {
             final newUrl = change.url ?? '';
@@ -817,7 +1188,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
               return NavigationDecision.prevent;
             }
 
-            // Detect direct downloadable files (.pdf, .zip, .apk, video, image, etc.)
             final lower = reqUrl.toLowerCase().split('?').first;
             if (lower.endsWith('.pdf') ||
                 lower.endsWith('.zip') ||
@@ -825,9 +1195,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 lower.endsWith('.doc') ||
                 lower.endsWith('.docx') ||
                 lower.endsWith('.mp3') ||
-                lower.endsWith('.mp4') ||
-                lower.endsWith('.jpg') ||
-                lower.endsWith('.png')) {
+                lower.endsWith('.mp4')) {
               _triggerRealFileDownload(reqUrl);
               return NavigationDecision.prevent;
             }
@@ -839,17 +1207,339 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     _webViewReady = true;
   }
 
+  // ===========================================================================
+  // IMAGE LONG-PRESS CONTEXT MENU, PREVIEW & IN-APP IMAGE VIEWER
+  // ===========================================================================
+  void _handleJsBridgeMessage(String raw) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map && decoded['type'] == 'image_long_press') {
+        final src = (decoded['src'] ?? '').toString();
+        final alt = (decoded['alt'] ?? 'Image').toString();
+        if (src.isNotEmpty) {
+          HapticFeedback.mediumImpact();
+          _openImageLongPressDialog(src, alt);
+        }
+      }
+    } catch (_) {}
+  }
+
+  void _openImageLongPressDialog(String imageUrl, String altText) {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
+    final displayTitle = altText.trim().isNotEmpty ? altText.trim() : imageUrl;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: p.menuBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(
+                        imageUrl,
+                        width: 48,
+                        height: 48,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          width: 48,
+                          height: 48,
+                          color: p.surfaceVariant,
+                          child: Icon(Icons.image_outlined, color: p.subtext),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        displayTitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          color: p.subtext,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Divider(height: 12, color: p.border),
+              ListTile(
+                title: Text('Open image in new tab',
+                    style: TextStyle(color: p.text, fontSize: 15)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openUrlInBackgroundTab(imageUrl, title: displayTitle);
+                },
+              ),
+              ListTile(
+                title: Text('Preview image',
+                    style: TextStyle(color: p.text, fontSize: 15)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openImagePreviewSheet(imageUrl, displayTitle);
+                },
+              ),
+              ListTile(
+                title: Text('Copy image',
+                    style: TextStyle(color: p.text, fontSize: 15)),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  final ok = await _intentChannel
+                      .invokeMethod<bool>('copyImageToClipboard', {
+                    'url': imageUrl,
+                  });
+                  _showToast(ok == true
+                      ? 'Image copied to clipboard'
+                      : 'Image link copied');
+                },
+              ),
+              ListTile(
+                title: Text('Download image',
+                    style: TextStyle(color: p.text, fontSize: 15)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _triggerRealFileDownload(imageUrl, forceCategory: 'Images');
+                },
+              ),
+              ListTile(
+                title: Text('Search image with Google Lens',
+                    style: TextStyle(color: p.text, fontSize: 15)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  final lensUrl =
+                      'https://lens.google.com/uploadbyurl?url=${Uri.encodeComponent(imageUrl)}';
+                  _loadFromSearchBar(lensUrl);
+                },
+              ),
+              ListTile(
+                title: Text('Share image',
+                    style: TextStyle(color: p.text, fontSize: 15)),
+                trailing: InkWell(
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _shareImageViaApp(imageUrl, _lastSharedApp);
+                  },
+                  borderRadius: BorderRadius.circular(14),
+                  child: _buildLastShareAppBadge(),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openChromeShareSheet(
+                    overrideUrl: imageUrl,
+                    overrideTitle: displayTitle,
+                    isImage: true,
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openUrlInBackgroundTab(String url, {String? title}) {
+    final newTab = BrowserTab(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      title: (title != null && title.isNotEmpty) ? title : url,
+      url: url,
+      isIncognito: _isIncognito,
+      isDesktop: _isDesktopMode,
+    );
+    setState(() {
+      _tabs.add(newTab);
+    });
+    _saveData();
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Opened in new tab'),
+        behavior: SnackBarBehavior.floating,
+        action: SnackBarAction(
+          label: 'Switch',
+          onPressed: () => _switchToTab(_tabs.length - 1),
+        ),
+      ),
+    );
+  }
+
+  void _openImagePreviewSheet(String imageUrl, String title) {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: p.bg,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SizedBox(
+        height: MediaQuery.of(context).size.height * 0.78,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14.5,
+                              color: p.text),
+                        ),
+                        Text(
+                          Uri.tryParse(imageUrl)?.host ?? imageUrl,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 12, color: p.subtext),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.open_in_new),
+                    tooltip: 'Open in new tab',
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _createNewTab(incognito: _isIncognito, url: imageUrl);
+                    },
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+            ),
+            Divider(height: 1, color: p.border),
+            Expanded(
+              child: InteractiveViewer(
+                minScale: 0.5,
+                maxScale: 5.0,
+                child: Center(
+                  child: Image.network(
+                    imageUrl,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) =>
+                        Icon(Icons.broken_image, size: 56, color: p.subtext),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openInAppImageViewer({
+    required String title,
+    String? filePath,
+    String? imageUrl,
+  }) {
+    final hasLocalFile =
+        filePath != null && filePath.isNotEmpty && File(filePath).existsSync();
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (pageCtx) => Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            foregroundColor: Colors.white,
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 15),
+                ),
+                Text(
+                  hasLocalFile ? filePath : (imageUrl ?? ''),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: Colors.white60),
+                ),
+              ],
+            ),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.share),
+                onPressed: () {
+                  if (imageUrl != null && imageUrl.isNotEmpty) {
+                    _shareImageViaApp(imageUrl, 'more');
+                  } else if (hasLocalFile) {
+                    _intentChannel.invokeMethod('openWithSystem', {
+                      'filePath': filePath,
+                      'url': imageUrl ?? '',
+                    });
+                  }
+                },
+              ),
+              IconButton(
+                icon: const Icon(Icons.open_in_new),
+                tooltip: 'Open with other app',
+                onPressed: () {
+                  _intentChannel.invokeMethod('openWithSystem', {
+                    'filePath': filePath ?? '',
+                    'url': imageUrl ?? '',
+                  });
+                },
+              ),
+            ],
+          ),
+          body: Center(
+            child: InteractiveViewer(
+              minScale: 0.5,
+              maxScale: 5.0,
+              child: hasLocalFile
+                  ? Image.file(File(filePath), fit: BoxFit.contain)
+                  : (imageUrl != null && imageUrl.isNotEmpty
+                      ? Image.network(imageUrl, fit: BoxFit.contain)
+                      : const Icon(Icons.image_not_supported,
+                          color: Colors.white54, size: 64)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // DOWNLOADS ENGINE (LIVE PROGRESS + OFFLINE PAGES + SMART OPEN)
+  // ===========================================================================
   String _detectDownloadCategory(String nameOrUrl) {
     final lower = nameOrUrl.toLowerCase().split('?').first;
     if (lower.endsWith('.mp4') ||
         lower.endsWith('.mkv') ||
-        lower.endsWith('.webm')) {
+        lower.endsWith('.webm') ||
+        lower.endsWith('.3gp')) {
       return 'Videos';
     }
     if (lower.endsWith('.jpg') ||
         lower.endsWith('.jpeg') ||
         lower.endsWith('.png') ||
-        lower.endsWith('.webp')) {
+        lower.endsWith('.webp') ||
+        lower.endsWith('.gif')) {
       return 'Images';
     }
     if (lower.endsWith('.html') ||
@@ -860,40 +1550,49 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     return 'Other';
   }
 
-  Future<void> _triggerRealFileDownload(String url) async {
+  Future<void> _triggerRealFileDownload(
+    String url, {
+    String? forceCategory,
+  }) async {
     try {
       final res = await _intentChannel.invokeMethod('downloadFile', {
         'url': url,
       });
+      int dlId = -1;
       String fileName = url.split('/').last.split('?').first;
       if (fileName.isEmpty) fileName = 'Downloaded_File';
       String filePath = '/storage/emulated/0/Download/$fileName';
-      String sizeLabel = 'Downloaded';
+      String sizeLabel = 'Starting download...';
 
       if (res is Map) {
+        dlId = (res['downloadId'] ?? -1) as int;
         fileName = (res['fileName'] ?? fileName).toString();
         filePath = (res['filePath'] ?? filePath).toString();
-        sizeLabel = (res['sizeLabel'] ?? 'Saved in Downloads').toString();
+        sizeLabel = (res['sizeLabel'] ?? sizeLabel).toString();
       }
 
       final entry = DownloadEntry(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
+        downloadId: dlId,
         title: fileName,
         url: url,
         filePath: filePath,
         sizeLabel: sizeLabel,
-        category: _detectDownloadCategory(fileName),
+        category: forceCategory ?? _detectDownloadCategory(fileName),
         dateLabel: _todayLabel(),
+        status: dlId > 0 ? 'running' : 'successful',
+        progress: dlId > 0 ? 0.02 : 1.0,
       );
 
       setState(() => _downloads.insert(0, entry));
+      _downloadsUpdateTick.value++;
       await _saveData();
-      _showDownloadBanner(entry);
+      _showToast('Downloading $fileName...');
+      _pollActiveDownloads();
     } catch (_) {}
   }
 
   Future<void> _downloadCurrentPageOffline() async {
-    // Chrome-style confirmation or immediate offline page save
     try {
       final rawHtmlObj = await _webController.runJavaScriptReturningResult(
           'document.documentElement.outerHTML');
@@ -911,21 +1610,24 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       });
 
       if (res is Map) {
-        final fileName = (res['fileName'] ?? '$titleToSave.html').toString();
         final filePath = (res['filePath'] ?? '').toString();
         final sizeLabel = (res['sizeLabel'] ?? '1.12 MB').toString();
 
         final entry = DownloadEntry(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
+          downloadId: -1,
           title: titleToSave,
           url: _currentUrl,
           filePath: filePath,
           sizeLabel: sizeLabel,
           category: 'Pages',
           dateLabel: _todayLabel(),
+          status: 'successful',
+          progress: 1.0,
         );
 
         setState(() => _downloads.insert(0, entry));
+        _downloadsUpdateTick.value++;
         await _saveData();
         _showDownloadBanner(entry);
       } else {
@@ -938,26 +1640,30 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
 
   void _showDownloadBanner(DownloadEntry entry) {
     if (!mounted) return;
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: const Color(0xFF1E232E),
+        backgroundColor: p.menuBg,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(color: p.border),
+        ),
         duration: const Duration(seconds: 4),
         content: Row(
           children: [
-            const Icon(Icons.download_done, color: Color(0xFFA8C7FA), size: 22),
+            Icon(Icons.download_done, color: p.accent, size: 22),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     'File downloaded',
                     style: TextStyle(
-                        color: Colors.white,
+                        color: p.text,
                         fontWeight: FontWeight.w600,
                         fontSize: 13.5),
                   ),
@@ -965,7 +1671,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                     '(${entry.sizeLabel}) ${entry.title}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    style: TextStyle(color: p.subtext, fontSize: 12),
                   ),
                 ],
               ),
@@ -974,7 +1680,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         ),
         action: SnackBarAction(
           label: 'Open',
-          textColor: const Color(0xFFA8C7FA),
+          textColor: p.accent,
           onPressed: () => _openDownloadEntry(entry),
         ),
       ),
@@ -982,39 +1688,42 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   Future<void> _openDownloadEntry(DownloadEntry entry) async {
-    final lowerPath = entry.filePath.toLowerCase();
-    final lowerUrl = entry.url.toLowerCase().split('?').first;
+    if (entry.isInProgress) {
+      _showToast('Downloading: ${entry.sizeLabel}');
+      return;
+    }
 
-    // If it's a ZIP, APK, PDF, Video, Audio, or physical file, trigger Android's native "Open with" chooser!
-    if (lowerPath.endsWith('.zip') ||
-        lowerPath.endsWith('.apk') ||
-        lowerPath.endsWith('.pdf') ||
-        lowerUrl.endsWith('.zip') ||
-        lowerUrl.endsWith('.apk') ||
-        lowerUrl.endsWith('.pdf')) {
-      final ok = await _intentChannel.invokeMethod<bool>('openWithSystem', {
-        'filePath': entry.filePath,
-        'url': entry.url,
-      });
-      if (ok != true && entry.url.isNotEmpty) {
+    // 1. Images open directly inside Study Browser's built-in Chrome-style viewer!
+    if (entry.category == 'Images') {
+      _openInAppImageViewer(
+        title: entry.title,
+        filePath: entry.filePath,
+        imageUrl: entry.url,
+      );
+      return;
+    }
+
+    // 2. Saved web pages open directly inside Study Browser!
+    if (entry.category == 'Pages') {
+      if (entry.url.isNotEmpty) {
         _loadFromSearchBar(entry.url);
+        return;
       }
-      return;
     }
 
-    // If it's a saved web page, offer to open in browser or system viewer
-    if (entry.category == 'Pages' && entry.url.isNotEmpty) {
-      _loadFromSearchBar(entry.url);
-      _showToast('Viewing saved page: ${entry.title}');
-      return;
-    }
-
-    await _intentChannel.invokeMethod('openWithSystem', {
+    // 3. Unsupported binary files (.zip, .pdf, .apk, .mp4) show Android "Open with" chooser popup
+    final ok = await _intentChannel.invokeMethod<bool>('openWithSystem', {
       'filePath': entry.filePath,
       'url': entry.url,
     });
+    if (ok != true && entry.url.isNotEmpty) {
+      _loadFromSearchBar(entry.url);
+    }
   }
 
+  // ===========================================================================
+  // TAB SYNC, REAL THUMBNAILS, HISTORY & SECURITY ENGINE
+  // ===========================================================================
   void _syncActiveTab({String? title, String? url}) {
     if (_tabs.isEmpty || _activeTabIndex >= _tabs.length) return;
     final tab = _tabs[_activeTabIndex];
@@ -1023,6 +1732,23 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     tab.isDesktop = _isDesktopMode;
     tab.isIncognito = _isIncognito;
     _saveData();
+  }
+
+  Future<void> _captureCurrentTabThumbnail() async {
+    if (!_webViewReady || _tabs.isEmpty || _activeTabIndex >= _tabs.length) {
+      return;
+    }
+    try {
+      final tab = _tabs[_activeTabIndex];
+      final path = await _intentChannel
+          .invokeMethod<String>('captureWebViewThumbnail', {
+        'tabId': tab.id,
+      });
+      if (path != null && path.isNotEmpty && mounted) {
+        tab.thumbnailPath = path;
+        await _saveData();
+      }
+    } catch (_) {}
   }
 
   void _recordHistory(String title, String url) {
@@ -1044,7 +1770,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           dateGroup: _todayLabel(),
         ),
       );
-      if (_history.length > 150) {
+      if (_history.length > 200) {
         _history.removeLast();
       }
     });
@@ -1196,12 +1922,26 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     final trimmed = input.trim();
     if (trimmed.isEmpty) return;
 
+    // Chrome view-source: support!
+    if (trimmed.toLowerCase().startsWith('view-source:')) {
+      final target = trimmed.substring('view-source:'.length).trim();
+      final fullUrl = target.startsWith('http') ? target : 'https://$target';
+      if (!_evaluateUrl(fullUrl, showOverlayOnBlock: true)) return;
+      _openViewSourcePage(fullUrl);
+      return;
+    }
+
     String targetUrl;
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
       targetUrl = trimmed;
     } else if (trimmed.contains('.') && !trimmed.contains(' ')) {
       targetUrl = 'https://$trimmed';
     } else {
+      if (!_isIncognito) {
+        _recentSearches.remove(trimmed);
+        _recentSearches.insert(0, trimmed);
+        if (_recentSearches.length > 25) _recentSearches.removeLast();
+      }
       targetUrl = '$_searchEngineUrl${Uri.encodeComponent(trimmed)}';
     }
 
@@ -1223,6 +1963,58 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     setState(() => _isPageBlocked = false);
     _applyNativeDesktopViewport(_isDesktopMode);
     _webController.loadRequest(Uri.parse(targetUrl));
+  }
+
+  Future<void> _openViewSourcePage(String url) async {
+    _showToast('Loading source code...');
+    String sourceText = '';
+    try {
+      final client = HttpClient();
+      final req = await client.getUrl(Uri.parse(url));
+      req.headers.set(HttpHeaders.userAgentHeader, _mobileUserAgent);
+      final resp = await req.close();
+      sourceText = await resp.transform(utf8.decoder).join();
+      client.close();
+    } catch (e) {
+      sourceText = 'Unable to fetch source code for $url\nError: $e';
+    }
+    if (!mounted) return;
+    final p = ChromePalette.of(context, incognito: _isIncognito);
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (ctx) => Scaffold(
+          backgroundColor: p.bg,
+          appBar: AppBar(
+            title: Text(
+              'view-source:$url',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 14),
+            ),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.copy),
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: sourceText));
+                  _showToast('Source code copied');
+                },
+              ),
+            ],
+          ),
+          body: SingleChildScrollView(
+            padding: const EdgeInsets.all(12),
+            child: SelectableText(
+              sourceText,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12,
+                color: p.text,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _toggleDesktopMode() async {
@@ -1258,7 +2050,11 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   Future<void> _toggleReadingMode() async {
     setState(() => _isReadingMode = !_isReadingMode);
     if (_isReadingMode) {
-      await _webController.runJavaScript(r'''
+      final isDark = Theme.of(context).brightness == Brightness.dark;
+      final bgHex = isDark ? '#1F1F1F' : '#FFFFFF';
+      final fgHex = isDark ? '#E3E3E3' : '#1F1F1F';
+      final headHex = isDark ? '#A8C7FA' : '#0B57D0';
+      await _webController.runJavaScript('''
         (function() {
           if (document.getElementById('sb-reader-overlay')) return;
           var title = document.title || '';
@@ -1266,12 +2062,12 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             .map(function(p) { return p.innerText.trim(); })
             .filter(function(t) { return t.length > 40; });
           var contentHtml = paragraphs.length > 0
-            ? paragraphs.map(function(p) { return '<p style="margin-bottom:16px;line-height:1.75;font-size:18px;color:#E2E8F0;">' + p + '</p>'; }).join('')
-            : '<p style="color:#94A3B8;">इस पेज पर रीडिंग मोड के लिए लंबा टेक्स्ट उपलब्ध नहीं है।</p>';
+            ? paragraphs.map(function(p) { return '<p style="margin-bottom:16px;line-height:1.75;font-size:18px;color:$fgHex;">' + p + '</p>'; }).join('')
+            : '<p style="color:#888;">इस पेज पर रीडिंग मोड के लिए लंबा टेक्स्ट उपलब्ध नहीं है।</p>';
           var overlay = document.createElement('div');
           overlay.id = 'sb-reader-overlay';
-          overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#0F141C;color:#F8FAFC;overflow-y:auto;padding:24px 20px 80px 20px;font-family:sans-serif;';
-          overlay.innerHTML = '<div style="max-width:680px;margin:0 auto;"><h1 style="font-size:24px;line-height:1.4;margin-bottom:20px;color:#A8C7FA;border-bottom:1px solid #262F40;padding-bottom:12px;">' + title + '</h1>' + contentHtml + '</div>';
+          overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:$bgHex;color:$fgHex;overflow-y:auto;padding:24px 20px 80px 20px;font-family:sans-serif;';
+          overlay.innerHTML = '<div style="max-width:680px;margin:0 auto;"><h1 style="font-size:24px;line-height:1.4;margin-bottom:20px;color:$headHex;border-bottom:1px solid #44444444;padding-bottom:12px;">' + title + '</h1>' + contentHtml + '</div>';
           document.body.appendChild(overlay);
         })();
       ''');
@@ -1299,7 +2095,12 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     await _webController.runJavaScript("window.find('$safeQuery');");
   }
 
-  void _createNewTab({bool incognito = false, String? url, String? groupId}) {
+  Future<void> _createNewTab({
+    bool incognito = false,
+    String? url,
+    String? groupId,
+  }) async {
+    await _captureCurrentTabThumbnail();
     final target = url ?? _homepageUrl;
     final newTab = BrowserTab(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -1318,8 +2119,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     _loadFromSearchBar(target);
   }
 
-  void _switchToTab(int index) {
+  Future<void> _switchToTab(int index) async {
     if (index < 0 || index >= _tabs.length) return;
+    await _captureCurrentTabThumbnail();
     final tab = _tabs[index];
     setState(() {
       _activeTabIndex = index;
@@ -1327,7 +2129,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       _isDesktopMode = tab.isDesktop;
     });
     _saveData();
-    _applyNativeDesktopViewport(_isDesktopMode);
+    await _applyNativeDesktopViewport(_isDesktopMode);
     _loadFromSearchBar(tab.url);
   }
 
@@ -1384,32 +2186,97 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     await _saveData();
   }
 
+  Future<void> _shareLinkViaApp(String url, String title, String appKey) async {
+    setState(() => _lastSharedApp = appKey);
+    await _saveData();
+    String? pkg;
+    if (appKey == 'whatsapp') pkg = 'com.whatsapp';
+    if (appKey == 'telegram') pkg = 'org.telegram.messenger';
+    await _intentChannel.invokeMethod('shareLink', {
+      'url': url,
+      'title': title,
+      if (pkg != null) 'package': pkg,
+    });
+  }
+
+  Future<void> _shareImageViaApp(String imageUrl, String appKey) async {
+    setState(() => _lastSharedApp = appKey);
+    await _saveData();
+    String? pkg;
+    if (appKey == 'whatsapp') pkg = 'com.whatsapp';
+    if (appKey == 'telegram') pkg = 'org.telegram.messenger';
+    await _intentChannel.invokeMethod('shareImage', {
+      'url': imageUrl,
+      if (pkg != null) 'package': pkg,
+    });
+  }
+
+  Widget _buildLastShareAppBadge() {
+    if (_lastSharedApp == 'telegram') {
+      return Container(
+        width: 28,
+        height: 28,
+        decoration: const BoxDecoration(
+          color: Color(0xFF2AABEE),
+          shape: BoxShape.circle,
+        ),
+        child: const Icon(Icons.send, size: 14, color: Colors.white),
+      );
+    }
+    if (_lastSharedApp == 'whatsapp') {
+      return Container(
+        width: 28,
+        height: 28,
+        decoration: const BoxDecoration(
+          color: Color(0xFF25D366),
+          shape: BoxShape.circle,
+        ),
+        child:
+            const Icon(Icons.chat_bubble_outline, size: 15, color: Colors.white),
+      );
+    }
+    return Container(
+      width: 28,
+      height: 28,
+      decoration: const BoxDecoration(
+        color: Color(0xFF1A73E8),
+        shape: BoxShape.circle,
+      ),
+      child: const Icon(Icons.share, size: 15, color: Colors.white),
+    );
+  }
+
   void _showToast(String msg) {
     if (!mounted) return;
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
           msg,
-          style: const TextStyle(color: Color(0xFFF1F5F9), fontSize: 13.5),
+          style: TextStyle(color: p.text, fontSize: 13.5),
         ),
-        backgroundColor: const Color(0xFF1E232E),
+        backgroundColor: p.menuBg,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(color: p.border),
+        ),
         duration: const Duration(seconds: 2),
       ),
     );
   }
 
   // ===========================================================================
-  // CHROME-STYLE 3-DOT POPUP MENU
+  // CHROME-STYLE 3-DOT POPUP MENU (LIGHT & DARK ADAPTIVE)
   // ===========================================================================
   void _openChromeStyleMenu() {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     showGeneralDialog(
       context: context,
       barrierDismissible: true,
       barrierLabel: 'Browser Menu',
-      barrierColor: Colors.black54,
+      barrierColor: Colors.black45,
       transitionDuration: const Duration(milliseconds: 150),
       pageBuilder: (ctx, anim1, anim2) {
         return SafeArea(
@@ -1418,14 +2285,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             child: Padding(
               padding: const EdgeInsets.only(top: 52, right: 10),
               child: Material(
-                color: const Color(0xFF1E232E),
+                color: p.menuBg,
                 elevation: 16,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(18),
-                  side: const BorderSide(color: Color(0xFF2E3646), width: 1),
+                  side: BorderSide(color: p.border, width: 1),
                 ),
                 child: SizedBox(
-                  width: 286,
+                  width: 288,
                   height: MediaQuery.of(context).size.height * 0.84,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -1434,15 +2301,16 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 10, vertical: 10),
-                        decoration: const BoxDecoration(
+                        decoration: BoxDecoration(
                           border: Border(
-                            bottom: BorderSide(color: Color(0xFF2D3343)),
+                            bottom: BorderSide(color: p.border),
                           ),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceAround,
                           children: [
                             _buildTopMenuIconButton(
+                              p: p,
                               icon: Icons.arrow_back,
                               tooltip: 'Back',
                               onTap: () async {
@@ -1453,6 +2321,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildTopMenuIconButton(
+                              p: p,
                               icon: Icons.arrow_forward,
                               tooltip: 'Forward',
                               onTap: () async {
@@ -1463,12 +2332,13 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildTopMenuIconButton(
+                              p: p,
                               icon: _isCurrentPageBookmarked
                                   ? Icons.star
                                   : Icons.star_border,
                               iconColor: _isCurrentPageBookmarked
-                                  ? const Color(0xFFA8C7FA)
-                                  : Colors.white,
+                                  ? p.accent
+                                  : p.text,
                               tooltip: 'Bookmark',
                               onTap: () {
                                 Navigator.pop(ctx);
@@ -1476,6 +2346,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildTopMenuIconButton(
+                              p: p,
                               icon: Icons.download_outlined,
                               tooltip: 'Download offline page',
                               onTap: () {
@@ -1484,6 +2355,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildTopMenuIconButton(
+                              p: p,
                               icon: Icons.refresh,
                               tooltip: 'Reload',
                               onTap: () {
@@ -1501,6 +2373,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                           padding: const EdgeInsets.symmetric(vertical: 6),
                           children: [
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.add_box_outlined,
                               title: 'New tab',
                               onTap: () {
@@ -1509,6 +2382,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.visibility_off_outlined,
                               title: 'New Incognito tab',
                               onTap: () {
@@ -1517,6 +2391,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.grid_view_outlined,
                               title: 'Add tab to new group',
                               onTap: () {
@@ -1524,8 +2399,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                 _promptCreateTabGroupForCurrentTab();
                               },
                             ),
-                            const Divider(height: 12),
+                            Divider(height: 12, color: p.border),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.history,
                               title: 'History',
                               onTap: () {
@@ -1534,6 +2410,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.delete_outline,
                               title: 'Delete browsing data',
                               onTap: () {
@@ -1542,6 +2419,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.tune,
                               title: 'Site controls',
                               onTap: () {
@@ -1549,8 +2427,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                 _openSiteControlsDialog();
                               },
                             ),
-                            const Divider(height: 12),
+                            Divider(height: 12, color: p.border),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.download_done_outlined,
                               title: 'Downloads',
                               onTap: () {
@@ -1559,6 +2438,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.star_border,
                               title: 'Bookmarks',
                               onTap: () {
@@ -1567,6 +2447,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.devices_outlined,
                               title: 'Recent tabs',
                               onTap: () {
@@ -1574,8 +2455,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                 _openFullScreenRecentTabsPage();
                               },
                             ),
-                            const Divider(height: 12),
+                            Divider(height: 12, color: p.border),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.zoom_in,
                               title: 'Zoom',
                               onTap: () {
@@ -1583,7 +2465,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                 _openZoomControlsWithAutoHide();
                               },
                             ),
-                            // SHARE ROW WITH DIRECT TELEGRAM QUICK ICON
+                            // SHARE ROW WITH LAST-SHARED APP QUICK ICON
                             InkWell(
                               onTap: () {
                                 Navigator.pop(ctx);
@@ -1594,48 +2476,33 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                     horizontal: 16, vertical: 10),
                                 child: Row(
                                   children: [
-                                    const Icon(Icons.share_outlined,
-                                        size: 21, color: Color(0xFFE2E8F0)),
+                                    Icon(Icons.share_outlined,
+                                        size: 21, color: p.text),
                                     const SizedBox(width: 16),
-                                    const Expanded(
+                                    Expanded(
                                       child: Text(
                                         'Share...',
                                         style: TextStyle(
                                           fontSize: 15,
-                                          color: Color(0xFFE2E8F0),
+                                          color: p.text,
                                         ),
                                       ),
                                     ),
                                     InkWell(
                                       onTap: () {
                                         Navigator.pop(ctx);
-                                        _intentChannel
-                                            .invokeMethod('shareLink', {
-                                          'url': _currentUrl,
-                                          'title': _pageTitle,
-                                          'package': 'org.telegram.messenger',
-                                        });
+                                        _shareLinkViaApp(_currentUrl,
+                                            _pageTitle, _lastSharedApp);
                                       },
                                       borderRadius: BorderRadius.circular(14),
-                                      child: Container(
-                                        width: 28,
-                                        height: 28,
-                                        decoration: const BoxDecoration(
-                                          color: Color(0xFF2AABEE),
-                                          shape: BoxShape.circle,
-                                        ),
-                                        child: const Icon(
-                                          Icons.send,
-                                          size: 15,
-                                          color: Colors.white,
-                                        ),
-                                      ),
+                                      child: _buildLastShareAppBadge(),
                                     ),
                                   ],
                                 ),
                               ),
                             ),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.find_in_page_outlined,
                               title: 'Find in page',
                               onTap: () {
@@ -1647,6 +2514,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.g_translate,
                               title: 'Translate...',
                               onTap: () {
@@ -1655,6 +2523,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.chrome_reader_mode_outlined,
                               title: _isReadingMode
                                   ? 'Hide Reading mode'
@@ -1665,6 +2534,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.add_to_home_screen,
                               title: 'Install and create shortcut',
                               onTap: () {
@@ -1683,15 +2553,15 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                     horizontal: 16, vertical: 10),
                                 child: Row(
                                   children: [
-                                    const Icon(Icons.desktop_windows_outlined,
-                                        size: 21, color: Color(0xFFE2E8F0)),
+                                    Icon(Icons.desktop_windows_outlined,
+                                        size: 21, color: p.text),
                                     const SizedBox(width: 16),
-                                    const Expanded(
+                                    Expanded(
                                       child: Text(
                                         'Desktop site',
                                         style: TextStyle(
                                           fontSize: 15,
-                                          color: Color(0xFFE2E8F0),
+                                          color: p.text,
                                         ),
                                       ),
                                     ),
@@ -1700,8 +2570,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                       width: 22,
                                       child: Checkbox(
                                         value: _isDesktopMode,
-                                        activeColor: const Color(0xFFA8C7FA),
-                                        checkColor: const Color(0xFF0F141C),
+                                        activeColor: p.accent,
+                                        checkColor: p.isDark
+                                            ? const Color(0xFF1F1F1F)
+                                            : Colors.white,
                                         onChanged: (_) {
                                           Navigator.pop(ctx);
                                           _toggleDesktopMode();
@@ -1712,17 +2584,19 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                 ),
                               ),
                             ),
-                            const Divider(height: 12),
+                            Divider(height: 12, color: p.border),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.shield_outlined,
                               title: 'Focus & Lock Settings',
-                              iconColor: const Color(0xFFA8C7FA),
+                              iconColor: p.accent,
                               onTap: () {
                                 Navigator.pop(ctx);
                                 _openLockManagerSheet();
                               },
                             ),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.settings_outlined,
                               title: 'Settings',
                               onTap: () {
@@ -1731,6 +2605,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               },
                             ),
                             _buildChromeMenuItem(
+                              p: p,
                               icon: Icons.help_outline,
                               title: 'Help and feedback',
                               onTap: () {
@@ -1753,10 +2628,11 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   Widget _buildTopMenuIconButton({
+    required ChromePalette p,
     required IconData icon,
     required String tooltip,
     required VoidCallback onTap,
-    Color iconColor = Colors.white,
+    Color? iconColor,
   }) {
     return InkWell(
       onTap: onTap,
@@ -1765,19 +2641,20 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         width: 40,
         height: 40,
         decoration: BoxDecoration(
-          color: const Color(0xFF282F3D),
+          color: p.topIconBg,
           borderRadius: BorderRadius.circular(20),
         ),
-        child: Icon(icon, size: 20, color: iconColor),
+        child: Icon(icon, size: 20, color: iconColor ?? p.text),
       ),
     );
   }
 
   Widget _buildChromeMenuItem({
+    required ChromePalette p,
     required IconData icon,
     required String title,
     required VoidCallback onTap,
-    Color iconColor = const Color(0xFFE2E8F0),
+    Color? iconColor,
   }) {
     return InkWell(
       onTap: onTap,
@@ -1785,14 +2662,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
-            Icon(icon, size: 21, color: iconColor),
+            Icon(icon, size: 21, color: iconColor ?? p.text),
             const SizedBox(width: 16),
             Expanded(
               child: Text(
                 title,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 15,
-                  color: Color(0xFFE2E8F0),
+                  color: p.text,
                 ),
               ),
             ),
@@ -1803,16 +2680,17 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   // ===========================================================================
-  // INSTALL AND CREATE SHORTCUT (Video 2: 01:34 - 01:59)
+  // INSTALL AND CREATE SHORTCUT
   // ===========================================================================
   void _openInstallAndCreateShortcutSheet() {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     final defaultTitle = _pageTitle.isNotEmpty
         ? _pageTitle
         : (Uri.tryParse(_currentUrl)?.host ?? 'Study Shortcut');
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF1E232E),
+      backgroundColor: p.menuBg,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
@@ -1822,32 +2700,35 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Install and create shortcut',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                  fontSize: 18, fontWeight: FontWeight.w600, color: p.text),
             ),
             const SizedBox(height: 16),
             Container(
               decoration: BoxDecoration(
-                color: const Color(0xFF141821),
+                color: p.surface,
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: const Color(0xFF2D3343)),
+                border: Border.all(color: p.border),
               ),
               child: ListTile(
                 leading: Container(
                   width: 42,
                   height: 42,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF263147),
+                    color: p.topIconBg,
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: const Icon(Icons.apps, color: Color(0xFFA8C7FA)),
+                  child: Icon(Icons.apps, color: p.accent),
                 ),
-                title: const Text('Install page as app',
-                    style: TextStyle(fontWeight: FontWeight.w500)),
+                title: Text('Install page as app',
+                    style: TextStyle(fontWeight: FontWeight.w500, color: p.text)),
                 subtitle: Text(defaultTitle,
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-                trailing: const Icon(Icons.chevron_right),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: p.subtext)),
+                trailing: Icon(Icons.chevron_right, color: p.subtext),
                 onTap: () {
                   Navigator.pop(ctx);
                   _promptConfirmPinShortcut(defaultTitle);
@@ -1857,25 +2738,25 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             const SizedBox(height: 10),
             Container(
               decoration: BoxDecoration(
-                color: const Color(0xFF141821),
+                color: p.surface,
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: const Color(0xFF2D3343)),
+                border: Border.all(color: p.border),
               ),
               child: ListTile(
                 leading: Container(
                   width: 42,
                   height: 42,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF263147),
+                    color: p.topIconBg,
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: const Icon(Icons.add_to_home_screen,
-                      color: Color(0xFFA8C7FA)),
+                  child: Icon(Icons.add_to_home_screen, color: p.accent),
                 ),
-                title: const Text('Create shortcut',
-                    style: TextStyle(fontWeight: FontWeight.w500)),
-                subtitle: const Text('Shortcuts open in Study Browser'),
-                trailing: const Icon(Icons.chevron_right),
+                title: Text('Create shortcut',
+                    style: TextStyle(fontWeight: FontWeight.w500, color: p.text)),
+                subtitle: Text('Shortcuts open in Study Browser',
+                    style: TextStyle(color: p.subtext)),
+                trailing: Icon(Icons.chevron_right, color: p.subtext),
                 onTap: () {
                   Navigator.pop(ctx);
                   _promptConfirmPinShortcut(defaultTitle);
@@ -1889,19 +2770,20 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   void _promptConfirmPinShortcut(String initialTitle) {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     final nameCtrl = TextEditingController(text: initialTitle);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E232E),
+        backgroundColor: p.menuBg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Text('Add to Home screen'),
+        title: Text('Add to Home screen', style: TextStyle(color: p.text)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text(
+            Text(
               'Touch and hold the icon or tap Add to place it on your Home screen:',
-              style: TextStyle(fontSize: 13, color: Colors.white70),
+              style: TextStyle(fontSize: 13, color: p.subtext),
             ),
             const SizedBox(height: 14),
             TextField(
@@ -1909,7 +2791,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
               decoration: InputDecoration(
                 labelText: 'Shortcut Title',
                 filled: true,
-                fillColor: const Color(0xFF12151C),
+                fillColor: p.bg,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
                 ),
@@ -1938,17 +2820,28 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   // ===========================================================================
-  // CHROME-STYLE SHARE SHEET (Video 2: 01:07 - 01:28)
+  // CHROME-STYLE SHARE SHEET
   // ===========================================================================
-  void _openChromeShareSheet() {
+  void _openChromeShareSheet({
+    String? overrideUrl,
+    String? overrideTitle,
+    bool isImage = false,
+  }) {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
+    final shareUrl = overrideUrl ?? _currentUrl;
+    final shareTitle =
+        (overrideTitle != null && overrideTitle.isNotEmpty)
+            ? overrideTitle
+            : (_pageTitle.isNotEmpty ? _pageTitle : 'Web Page');
+
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF1E232E),
+      backgroundColor: p.menuBg,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
       builder: (ctx) => Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1959,60 +2852,78 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                   onPressed: () => Navigator.pop(ctx),
                   child: const Text('Cancel'),
                 ),
-                const Text(
-                  'Share link',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                Text(
+                  isImage ? 'Share image' : 'Share link',
+                  style: TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w600, color: p.text),
                 ),
                 const SizedBox(width: 48),
               ],
             ),
             const SizedBox(height: 8),
-            // Link Preview Box with Copy Button
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFF141821),
+                color: p.surface,
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: const Color(0xFF2D3343)),
+                border: Border.all(color: p.border),
               ),
               child: Row(
                 children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF263147),
-                      borderRadius: BorderRadius.circular(10),
+                  if (isImage)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(
+                        shareUrl,
+                        width: 42,
+                        height: 42,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          width: 42,
+                          height: 42,
+                          color: p.topIconBg,
+                          child: Icon(Icons.image_outlined, color: p.accent),
+                        ),
+                      ),
+                    )
+                  else
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: p.topIconBg,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(Icons.public, color: p.accent),
                     ),
-                    child: const Icon(Icons.public, color: Color(0xFFA8C7FA)),
-                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _pageTitle.isNotEmpty ? _pageTitle : 'Web Page',
+                          shareTitle,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w600, fontSize: 14),
+                          style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                              color: p.text),
                         ),
                         Text(
-                          _currentUrl,
+                          shareUrl,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              color: Color(0xFFA8C7FA), fontSize: 12),
+                          style: TextStyle(color: p.accent, fontSize: 12),
                         ),
                       ],
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.copy, size: 20),
+                    icon: Icon(Icons.copy, size: 20, color: p.text),
                     tooltip: 'Copy link',
                     onPressed: () {
-                      Clipboard.setData(ClipboardData(text: _currentUrl));
+                      Clipboard.setData(ClipboardData(text: shareUrl));
                       Navigator.pop(ctx);
                       _showToast('लिंक कॉपी कर लिया गया');
                     },
@@ -2021,7 +2932,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
               ),
             ),
             const SizedBox(height: 14),
-            // Action Chips Row (Print, Send to device, QR Code, Save Offline)
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
@@ -2032,7 +2942,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                     onPressed: () {
                       Navigator.pop(ctx);
                       _intentChannel.invokeMethod('printPage', {
-                        'title': _pageTitle,
+                        'title': shareTitle,
                       });
                     },
                   ),
@@ -2042,72 +2952,81 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                     label: const Text('QR Code'),
                     onPressed: () {
                       Navigator.pop(ctx);
-                      _showQrCodeDialog();
+                      _showQrCodeDialog(shareUrl);
                     },
                   ),
                   const SizedBox(width: 8),
                   ActionChip(
                     avatar: const Icon(Icons.download_outlined, size: 17),
-                    label: const Text('Save Offline'),
+                    label: Text(isImage ? 'Download Image' : 'Save Offline'),
                     onPressed: () {
                       Navigator.pop(ctx);
-                      _downloadCurrentPageOffline();
+                      if (isImage) {
+                        _triggerRealFileDownload(shareUrl,
+                            forceCategory: 'Images');
+                      } else {
+                        _downloadCurrentPageOffline();
+                      }
                     },
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 18),
-            // Direct App Share Row
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
                 _buildShareAppCircle(
+                  p: p,
                   label: 'WhatsApp',
                   icon: Icons.chat_bubble_outline,
                   color: const Color(0xFF25D366),
                   onTap: () {
                     Navigator.pop(ctx);
-                    _intentChannel.invokeMethod('shareLink', {
-                      'url': _currentUrl,
-                      'title': _pageTitle,
-                      'package': 'com.whatsapp',
-                    });
+                    if (isImage) {
+                      _shareImageViaApp(shareUrl, 'whatsapp');
+                    } else {
+                      _shareLinkViaApp(shareUrl, shareTitle, 'whatsapp');
+                    }
                   },
                 ),
                 _buildShareAppCircle(
+                  p: p,
                   label: 'Telegram',
                   icon: Icons.send,
                   color: const Color(0xFF2AABEE),
                   onTap: () {
                     Navigator.pop(ctx);
-                    _intentChannel.invokeMethod('shareLink', {
-                      'url': _currentUrl,
-                      'title': _pageTitle,
-                      'package': 'org.telegram.messenger',
-                    });
+                    if (isImage) {
+                      _shareImageViaApp(shareUrl, 'telegram');
+                    } else {
+                      _shareLinkViaApp(shareUrl, shareTitle, 'telegram');
+                    }
                   },
                 ),
                 _buildShareAppCircle(
+                  p: p,
                   label: 'Copy Link',
                   icon: Icons.link,
-                  color: const Color(0xFF64748B),
+                  color: const Color(0xFF5F6368),
                   onTap: () {
                     Navigator.pop(ctx);
-                    Clipboard.setData(ClipboardData(text: _currentUrl));
+                    Clipboard.setData(ClipboardData(text: shareUrl));
                     _showToast('लिंक कॉपी हो गया');
                   },
                 ),
                 _buildShareAppCircle(
+                  p: p,
                   label: 'More Apps',
                   icon: Icons.more_horiz,
-                  color: const Color(0xFF3B82F6),
+                  color: const Color(0xFF1A73E8),
                   onTap: () {
                     Navigator.pop(ctx);
-                    _intentChannel.invokeMethod('shareLink', {
-                      'url': _currentUrl,
-                      'title': _pageTitle,
-                    });
+                    if (isImage) {
+                      _shareImageViaApp(shareUrl, 'more');
+                    } else {
+                      _shareLinkViaApp(shareUrl, shareTitle, 'more');
+                    }
                   },
                 ),
               ],
@@ -2119,6 +3038,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   Widget _buildShareAppCircle({
+    required ChromePalette p,
     required String label,
     required IconData icon,
     required Color color,
@@ -2140,20 +3060,21 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             child: Icon(icon, color: Colors.white, size: 22),
           ),
           const SizedBox(height: 6),
-          Text(label, style: const TextStyle(fontSize: 12)),
+          Text(label, style: TextStyle(fontSize: 12, color: p.text)),
         ],
       ),
     );
   }
 
-  void _showQrCodeDialog() {
+  void _showQrCodeDialog(String targetUrl) {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     final qrImageUrl =
-        'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${Uri.encodeComponent(_currentUrl)}';
+        'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${Uri.encodeComponent(targetUrl)}';
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E232E),
-        title: const Text('Scan QR Code'),
+        backgroundColor: p.menuBg,
+        title: Text('Scan QR Code', style: TextStyle(color: p.text)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -2179,10 +3100,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             ),
             const SizedBox(height: 10),
             Text(
-              _currentUrl,
+              targetUrl,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12, color: Colors.white70),
+              style: TextStyle(fontSize: 12, color: p.subtext),
             ),
           ],
         ),
@@ -2197,9 +3118,12 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   // ===========================================================================
-  // FULL-SCREEN CHROME GRID TAB SWITCHER & TAB GROUPS (Video 1: 01:51 - 02:24)
+  // FULL-SCREEN CHROME GRID TAB SWITCHER (WITH REAL PAGE THUMBNAILS)
   // ===========================================================================
-  void _openFullScreenTabSwitcher() {
+  Future<void> _openFullScreenTabSwitcher() async {
+    await _captureCurrentTabThumbnail();
+    if (!mounted) return;
+
     String searchQuery = '';
     bool showIncognitoOnly = _isIncognito;
 
@@ -2207,6 +3131,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       MaterialPageRoute(
         builder: (pageCtx) => StatefulBuilder(
           builder: (pageCtx, setGridState) {
+            final p =
+                ChromePalette.of(pageCtx, incognito: showIncognitoOnly);
+
             final filteredTabs = _tabs.where((t) {
               if (t.isIncognito != showIncognitoOnly) return false;
               if (searchQuery.trim().isNotEmpty) {
@@ -2217,7 +3144,6 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
               return true;
             }).toList();
 
-            // Separate ungrouped tabs and tab groups
             final ungroupedTabs = filteredTabs
                 .where((t) =>
                     t.groupId == null ||
@@ -2225,16 +3151,17 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 .toList();
 
             return Scaffold(
-              backgroundColor: const Color(0xFF12151C),
+              backgroundColor: p.bg,
               appBar: AppBar(
-                backgroundColor: const Color(0xFF12151C),
+                backgroundColor: p.bg,
+                foregroundColor: p.text,
                 elevation: 0,
                 automaticallyImplyLeading: false,
                 titleSpacing: 12,
                 title: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    // Blue + New Tab Button (Chrome Left)
+                    // + New Tab Button
                     InkWell(
                       onTap: () {
                         Navigator.pop(pageCtx);
@@ -2245,10 +3172,15 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         width: 40,
                         height: 40,
                         decoration: BoxDecoration(
-                          color: const Color(0xFF3B82F6),
+                          color: p.accent,
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: const Icon(Icons.add, color: Colors.white),
+                        child: Icon(
+                          Icons.add,
+                          color: p.isDark
+                              ? const Color(0xFF1F1F1F)
+                              : Colors.white,
+                        ),
                       ),
                     ),
 
@@ -2256,9 +3188,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                     Container(
                       padding: const EdgeInsets.all(4),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF1E232E),
+                        color: p.surface,
                         borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: const Color(0xFF2D3343)),
+                        border: Border.all(color: p.border),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -2272,14 +3204,16 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                   horizontal: 14, vertical: 6),
                               decoration: BoxDecoration(
                                 color: !showIncognitoOnly
-                                    ? const Color(0xFF2E384D)
+                                    ? p.topIconBg
                                     : Colors.transparent,
                                 borderRadius: BorderRadius.circular(10),
                               ),
                               child: Text(
                                 '${_tabs.where((t) => !t.isIncognito).length}',
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.bold, fontSize: 14),
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                    color: p.text),
                               ),
                             ),
                           ),
@@ -2293,21 +3227,22 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                   horizontal: 14, vertical: 6),
                               decoration: BoxDecoration(
                                 color: showIncognitoOnly
-                                    ? const Color(0xFF2E384D)
+                                    ? p.topIconBg
                                     : Colors.transparent,
                                 borderRadius: BorderRadius.circular(10),
                               ),
-                              child: const Icon(Icons.visibility_off_outlined,
-                                  size: 18),
+                              child: Icon(Icons.visibility_off_outlined,
+                                  size: 18, color: p.text),
                             ),
                           ),
                         ],
                       ),
                     ),
 
-                    // Right 3-Dot Menu in Tab Switcher
+                    // Right 3-Dot Menu
                     PopupMenuButton<String>(
-                      color: const Color(0xFF1E232E),
+                      color: p.menuBg,
+                      icon: Icon(Icons.more_vert, color: p.text),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(14)),
                       onSelected: (val) {
@@ -2400,29 +3335,30 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
               ),
               body: Column(
                 children: [
-                  // Search Your Tabs Bar
                   Padding(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                     child: Container(
                       height: 44,
                       decoration: BoxDecoration(
-                        color: const Color(0xFF1E232E),
+                        color: p.addressBar,
                         borderRadius: BorderRadius.circular(22),
                       ),
                       child: TextField(
+                        style: TextStyle(color: p.text),
                         onChanged: (v) => setGridState(() => searchQuery = v),
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           hintText: 'Search your tabs',
-                          prefixIcon: Icon(Icons.search, size: 20),
+                          hintStyle: TextStyle(color: p.subtext),
+                          prefixIcon:
+                              Icon(Icons.search, size: 20, color: p.subtext),
                           border: InputBorder.none,
-                          contentPadding: EdgeInsets.symmetric(vertical: 11),
+                          contentPadding:
+                              const EdgeInsets.symmetric(vertical: 11),
                         ),
                       ),
                     ),
                   ),
-
-                  // 2-COLUMN SYMMETRICAL CARD GRID (Tab Groups + Individual Tabs)
                   Expanded(
                     child: GridView.builder(
                       padding: const EdgeInsets.all(12),
@@ -2431,7 +3367,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         crossAxisCount: 2,
                         mainAxisSpacing: 12,
                         crossAxisSpacing: 12,
-                        childAspectRatio: 0.78,
+                        childAspectRatio: 0.76,
                       ),
                       itemCount: (!showIncognitoOnly ? _tabGroups.length : 0) +
                           ungroupedTabs.length,
@@ -2444,6 +3380,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               .where((t) => t.groupId == group.id)
                               .toList();
                           return _buildTabGroupGridCard(
+                            p: p,
                             group: group,
                             groupTabs: groupTabs,
                             pageCtx: pageCtx,
@@ -2453,6 +3390,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         final tab = ungroupedTabs[idx - groupCount];
                         final realIndex = _tabs.indexOf(tab);
                         return _buildSingleTabGridCard(
+                          p: p,
                           tab: tab,
                           realIndex: realIndex,
                           pageCtx: pageCtx,
@@ -2471,6 +3409,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   Widget _buildSingleTabGridCard({
+    required ChromePalette p,
     required BrowserTab tab,
     required int realIndex,
     required BuildContext pageCtx,
@@ -2478,6 +3417,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }) {
     final isSelected = realIndex == _activeTabIndex;
     final host = Uri.tryParse(tab.url)?.host.replaceAll('www.', '') ?? tab.url;
+    final hasThumb = tab.thumbnailPath != null &&
+        tab.thumbnailPath!.isNotEmpty &&
+        File(tab.thumbnailPath!).existsSync();
 
     return GestureDetector(
       onTap: () {
@@ -2486,26 +3428,23 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       },
       child: Container(
         decoration: BoxDecoration(
-          color: const Color(0xFF1E232E),
+          color: p.card,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: isSelected
-                ? const Color(0xFFA8C7FA)
-                : const Color(0xFF2E3646),
+            color: isSelected ? p.accent : p.border,
             width: isSelected ? 2 : 1,
           ),
         ),
         child: Column(
           children: [
-            // Card Header
             Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 4, 6),
+              padding: const EdgeInsets.fromLTRB(10, 6, 4, 4),
               child: Row(
                 children: [
                   Icon(
                     tab.isIncognito ? Icons.visibility_off : Icons.public,
-                    size: 16,
-                    color: const Color(0xFFA8C7FA),
+                    size: 15,
+                    color: p.accent,
                   ),
                   const SizedBox(width: 6),
                   Expanded(
@@ -2513,21 +3452,21 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                       tab.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 12.5, fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          color: p.text),
                     ),
                   ),
                   PopupMenuButton<String>(
                     padding: EdgeInsets.zero,
-                    icon: const Icon(Icons.more_vert, size: 16),
+                    color: p.menuBg,
+                    icon: Icon(Icons.more_vert, size: 16, color: p.subtext),
                     onSelected: (val) {
                       if (val == 'group') {
                         _promptMoveTabToGroup(tab, setGridState);
                       } else if (val == 'share') {
-                        _intentChannel.invokeMethod('shareLink', {
-                          'url': tab.url,
-                          'title': tab.title,
-                        });
+                        _shareLinkViaApp(tab.url, tab.title, 'more');
                       }
                     },
                     itemBuilder: (_) => const [
@@ -2546,56 +3485,32 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                       _closeTab(realIndex);
                       setGridState(() {});
                     },
-                    child: const Padding(
-                      padding: EdgeInsets.all(4),
-                      child: Icon(Icons.close, size: 17),
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: Icon(Icons.close, size: 17, color: p.subtext),
                     ),
                   ),
                 ],
               ),
             ),
-            // Card Preview Body
             Expanded(
               child: Container(
                 width: double.infinity,
-                margin: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.fromLTRB(6, 0, 6, 6),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF12151C),
+                  color: p.bg,
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    CircleAvatar(
-                      radius: 20,
-                      backgroundColor: const Color(0xFF263147),
-                      child: Text(
-                        host.isNotEmpty ? host[0].toUpperCase() : 'W',
-                        style: const TextStyle(
-                            color: Color(0xFFA8C7FA),
-                            fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      tab.title,
-                      maxLines: 2,
-                      textAlign: TextAlign.center,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 12.5, fontWeight: FontWeight.w500),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      host,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 11, color: Colors.white54),
-                    ),
-                  ],
-                ),
+                clipBehavior: Clip.antiAlias,
+                child: hasThumb
+                    ? Image.file(
+                        File(tab.thumbnailPath!),
+                        fit: BoxFit.cover,
+                        alignment: Alignment.topCenter,
+                        errorBuilder: (_, __, ___) =>
+                            _buildTabCardFallbackBody(p, tab, host),
+                      )
+                    : _buildTabCardFallbackBody(p, tab, host),
               ),
             ),
           ],
@@ -2604,7 +3519,44 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     );
   }
 
+  Widget _buildTabCardFallbackBody(
+      ChromePalette p, BrowserTab tab, String host) {
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          CircleAvatar(
+            radius: 20,
+            backgroundColor: p.topIconBg,
+            child: Text(
+              host.isNotEmpty ? host[0].toUpperCase() : 'W',
+              style: TextStyle(color: p.accent, fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            tab.title,
+            maxLines: 2,
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+                fontSize: 12.5, fontWeight: FontWeight.w500, color: p.text),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            host,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 11, color: p.subtext),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTabGroupGridCard({
+    required ChromePalette p,
     required BrowserTabGroup group,
     required List<BrowserTab> groupTabs,
     required BuildContext pageCtx,
@@ -2612,13 +3564,12 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }) {
     final grpColor = Color(group.colorValue);
     return GestureDetector(
-      onTap: () =>
-          _openTabGroupDetailDialog(group, pageCtx, setGridState),
+      onTap: () => _openTabGroupDetailDialog(group, pageCtx, setGridState),
       child: Container(
         decoration: BoxDecoration(
-          color: grpColor.withOpacity(0.18),
+          color: grpColor.withAlpha(38),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: grpColor.withOpacity(0.7), width: 1.5),
+          border: Border.all(color: grpColor.withAlpha(180), width: 1.5),
         ),
         child: Column(
           children: [
@@ -2640,8 +3591,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                       '${group.title} (${groupTabs.length})',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 12.5, fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.bold,
+                          color: p.text),
                     ),
                   ),
                   InkWell(
@@ -2655,7 +3608,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                       _saveData();
                       setGridState(() {});
                     },
-                    child: const Icon(Icons.close, size: 17),
+                    child: Icon(Icons.close, size: 17, color: p.text),
                   ),
                 ],
               ),
@@ -2673,20 +3626,33 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                   itemCount: groupTabs.length.clamp(0, 4),
                   itemBuilder: (_, i) {
                     final t = groupTabs[i];
+                    final hasThumb = t.thumbnailPath != null &&
+                        t.thumbnailPath!.isNotEmpty &&
+                        File(t.thumbnailPath!).existsSync();
                     return Container(
-                      padding: const EdgeInsets.all(6),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF12151C),
+                        color: p.bg,
                         borderRadius: BorderRadius.circular(8),
                       ),
+                      clipBehavior: Clip.antiAlias,
                       alignment: Alignment.center,
-                      child: Text(
-                        t.title,
-                        maxLines: 2,
-                        textAlign: TextAlign.center,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 10),
-                      ),
+                      child: hasThumb
+                          ? Image.file(
+                              File(t.thumbnailPath!),
+                              fit: BoxFit.cover,
+                              width: double.infinity,
+                              height: double.infinity,
+                            )
+                          : Padding(
+                              padding: const EdgeInsets.all(4),
+                              child: Text(
+                                t.title,
+                                maxLines: 2,
+                                textAlign: TextAlign.center,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontSize: 10, color: p.text),
+                              ),
+                            ),
                     );
                   },
                 ),
@@ -2703,6 +3669,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     BuildContext switcherCtx,
     StateSetter setGridState,
   ) {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -2710,7 +3677,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           final groupTabs =
               _tabs.where((t) => t.groupId == group.id).toList();
           return AlertDialog(
-            backgroundColor: const Color(0xFF1E232E),
+            backgroundColor: p.menuBg,
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
             title: Row(
@@ -2720,7 +3687,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text('${group.title} (${groupTabs.length} tabs)',
-                      style: const TextStyle(fontSize: 16)),
+                      style: TextStyle(fontSize: 16, color: p.text)),
                 ),
                 IconButton(
                   icon: const Icon(Icons.add),
@@ -2736,7 +3703,8 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             content: SizedBox(
               width: double.maxFinite,
               child: groupTabs.isEmpty
-                  ? const Text('इस ग्रुप में अभी कोई टैब नहीं है।')
+                  ? Text('इस ग्रुप में अभी कोई टैब नहीं है।',
+                      style: TextStyle(color: p.subtext))
                   : ListView.builder(
                       shrinkWrap: true,
                       itemCount: groupTabs.length,
@@ -2744,8 +3712,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         final t = groupTabs[i];
                         final rIdx = _tabs.indexOf(t);
                         return ListTile(
-                          leading: const Icon(Icons.public,
-                              color: Color(0xFFA8C7FA)),
+                          leading: Icon(Icons.public, color: p.accent),
                           title: Text(t.title,
                               maxLines: 1, overflow: TextOverflow.ellipsis),
                           subtitle: Text(t.url,
@@ -2788,6 +3755,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     StateSetter? setGridState, {
     bool assignCurrentTab = false,
   }) {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     final titleCtrl = TextEditingController(text: '1 tab');
     final List<int> palette = [
       0xFF94A3B8,
@@ -2805,19 +3773,17 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: const Color(0xFF1E232E),
+          backgroundColor: p.menuBg,
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-          title: const Text('New tab group'),
+          title: Text('New tab group', style: TextStyle(color: p.text)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
                 controller: titleCtrl,
                 autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: 'Title',
-                ),
+                decoration: const InputDecoration(labelText: 'Title'),
               ),
               const SizedBox(height: 16),
               Wrap(
@@ -2834,7 +3800,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         color: Color(c),
                         shape: BoxShape.circle,
                         border: isSel
-                            ? Border.all(color: Colors.white, width: 3)
+                            ? Border.all(color: p.text, width: 3)
                             : null,
                       ),
                     ),
@@ -2883,22 +3849,24 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       _promptCreateNewTabGroupDialog(setGridState, assignCurrentTab: true);
       return;
     }
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF1E232E),
+      backgroundColor: p.menuBg,
       builder: (ctx) => Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Add tab to group',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
-            const Divider(),
+            Text('Add tab to group',
+                style: TextStyle(
+                    fontSize: 17, fontWeight: FontWeight.w600, color: p.text)),
+            Divider(color: p.border),
             ..._tabGroups.map((g) => ListTile(
-                  leading:
-                      CircleAvatar(radius: 8, backgroundColor: Color(g.colorValue)),
-                  title: Text(g.title),
+                  leading: CircleAvatar(
+                      radius: 8, backgroundColor: Color(g.colorValue)),
+                  title: Text(g.title, style: TextStyle(color: p.text)),
                   onTap: () {
                     setState(() => tab.groupId = g.id);
                     _saveData();
@@ -2914,7 +3882,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   // ===========================================================================
-  // FULL-SCREEN CHROME DOWNLOADS PAGE (Video 1: 00:46 - 01:20)
+  // FULL-SCREEN CHROME DOWNLOADS PAGE (WITH LIVE CIRCULAR PROGRESS RING!)
   // ===========================================================================
   Future<void> _openFullScreenDownloadsPage() async {
     String selectedFilter = 'All';
@@ -2933,240 +3901,315 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     } catch (_) {}
 
     if (!mounted) return;
+    _pollActiveDownloads();
 
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (pageCtx) => StatefulBuilder(
           builder: (pageCtx, setDlPage) {
-            final filters = ['All', 'Videos', 'Images', 'Pages', 'Other'];
-            final filteredList = _downloads.where((d) {
-              if (selectedFilter != 'All' && d.category != selectedFilter) {
-                return false;
-              }
-              if (searchQuery.trim().isNotEmpty) {
-                final q = searchQuery.toLowerCase();
-                return d.title.toLowerCase().contains(q) ||
-                    d.url.toLowerCase().contains(q);
-              }
-              return true;
-            }).toList();
+            final p = ChromePalette.of(pageCtx);
+            return ValueListenableBuilder<int>(
+              valueListenable: _downloadsUpdateTick,
+              builder: (_, __, ___) {
+                final filters = ['All', 'Videos', 'Images', 'Pages', 'Other'];
+                final filteredList = _downloads.where((d) {
+                  if (selectedFilter != 'All' && d.category != selectedFilter) {
+                    return false;
+                  }
+                  if (searchQuery.trim().isNotEmpty) {
+                    final q = searchQuery.toLowerCase();
+                    return d.title.toLowerCase().contains(q) ||
+                        d.url.toLowerCase().contains(q);
+                  }
+                  return true;
+                }).toList();
 
-            return Scaffold(
-              backgroundColor: const Color(0xFF12151C),
-              appBar: AppBar(
-                backgroundColor: const Color(0xFF12151C),
-                automaticallyImplyLeading: false,
-                title: showSearch
-                    ? TextField(
-                        autofocus: true,
-                        onChanged: (v) => setDlPage(() => searchQuery = v),
-                        decoration: const InputDecoration(
-                          hintText: 'Search downloads...',
-                          border: InputBorder.none,
-                        ),
-                      )
-                    : const Text('Downloads',
-                        style: TextStyle(fontWeight: FontWeight.w600)),
-                actions: [
-                  IconButton(
-                    icon: const Icon(Icons.settings_outlined),
-                    onPressed: () {
-                      Navigator.pop(pageCtx);
-                      _openFullScreenSettingsPage();
-                    },
-                  ),
-                  IconButton(
-                    icon: Icon(showSearch ? Icons.search_off : Icons.search),
-                    onPressed: () => setDlPage(() {
-                      showSearch = !showSearch;
-                      if (!showSearch) searchQuery = '';
-                    }),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.pop(pageCtx),
-                  ),
-                ],
-              ),
-              body: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Storage Usage Indicator
-                  Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          storageLabel,
-                          style: const TextStyle(
-                              fontSize: 12.5, color: Colors.white70),
-                        ),
-                        const SizedBox(height: 6),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            value: storageRatio,
-                            minHeight: 4,
-                            color: const Color(0xFF3B82F6),
-                            backgroundColor: const Color(0xFF283040),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  // Filter Chips Row (All, Videos, Images, Pages, Other)
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Row(
-                      children: filters.map((f) {
-                        final isSel = selectedFilter == f;
-                        IconData chipIcon = Icons.check;
-                        if (f == 'Videos') chipIcon = Icons.videocam_outlined;
-                        if (f == 'Images') chipIcon = Icons.image_outlined;
-                        if (f == 'Pages') chipIcon = Icons.public;
-                        if (f == 'Other') {
-                          chipIcon = Icons.insert_drive_file_outlined;
-                        }
-
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: FilterChip(
-                            selected: isSel,
-                            showCheckmark: false,
-                            avatar: Icon(chipIcon, size: 17),
-                            label: Text(f),
-                            selectedColor: const Color(0xFF263147),
-                            backgroundColor: const Color(0xFF1E232E),
-                            onSelected: (_) =>
-                                setDlPage(() => selectedFilter = f),
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-
-                  const Divider(height: 8),
-
-                  Expanded(
-                    child: filteredList.isEmpty
-                        ? const Center(
-                            child: Text(
-                              'Downloads you save appear here',
-                              style: TextStyle(color: Colors.white54),
+                return Scaffold(
+                  backgroundColor: p.bg,
+                  appBar: AppBar(
+                    backgroundColor: p.bg,
+                    foregroundColor: p.text,
+                    automaticallyImplyLeading: false,
+                    title: showSearch
+                        ? TextField(
+                            autofocus: true,
+                            style: TextStyle(color: p.text),
+                            onChanged: (v) =>
+                                setDlPage(() => searchQuery = v),
+                            decoration: InputDecoration(
+                              hintText: 'Search downloads...',
+                              hintStyle: TextStyle(color: p.subtext),
+                              border: InputBorder.none,
                             ),
                           )
-                        : ListView.builder(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 8),
-                            itemCount: filteredList.length,
-                            itemBuilder: (_, i) {
-                              final item = filteredList[i];
-                              final showHeader = i == 0 ||
-                                  filteredList[i - 1].dateLabel !=
-                                      item.dateLabel;
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (showHeader)
-                                    Padding(
-                                      padding: const EdgeInsets.only(
-                                          top: 12, bottom: 8),
-                                      child: Text(
-                                        item.dateLabel,
-                                        style: const TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w600,
-                                          color: Colors.white70,
-                                        ),
-                                      ),
-                                    ),
-                                  ListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    leading: CircleAvatar(
-                                      radius: 20,
-                                      backgroundColor:
-                                          const Color(0xFF1E232E),
-                                      child: Icon(
-                                        item.category == 'Pages'
-                                            ? Icons.public
-                                            : (item.category == 'Images'
-                                                ? Icons.image_outlined
-                                                : (item.category == 'Videos'
-                                                    ? Icons.videocam_outlined
-                                                    : Icons
-                                                        .insert_drive_file_outlined)),
-                                        color: const Color(0xFFA8C7FA),
-                                      ),
-                                    ),
-                                    title: Text(
-                                      item.title,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.w500),
-                                    ),
-                                    subtitle: Text(
-                                      item.sizeLabel,
-                                      style: const TextStyle(
-                                          fontSize: 12, color: Colors.white60),
-                                    ),
-                                    onTap: () => _openDownloadEntry(item),
-                                    trailing: PopupMenuButton<String>(
-                                      color: const Color(0xFF1E232E),
-                                      shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(14)),
-                                      onSelected: (val) async {
-                                        if (val == 'share') {
-                                          await _intentChannel
-                                              .invokeMethod('shareLink', {
-                                            'url': item.url.isNotEmpty
-                                                ? item.url
-                                                : item.filePath,
-                                            'title': item.title,
-                                          });
-                                        } else if (val == 'rename') {
-                                          _promptRenameDownloadItem(
-                                              item, setDlPage);
-                                        } else if (val == 'delete') {
-                                          await _intentChannel.invokeMethod(
-                                              'deleteFileOnDisk', {
-                                            'filePath': item.filePath,
-                                          });
-                                          setState(
-                                              () => _downloads.remove(item));
-                                          setDlPage(() {});
-                                          await _saveData();
-                                        }
-                                      },
-                                      itemBuilder: (_) => const [
-                                        PopupMenuItem(
-                                          value: 'share',
-                                          child: Text('Share'),
-                                        ),
-                                        PopupMenuItem(
-                                          value: 'rename',
-                                          child: Text('Rename'),
-                                        ),
-                                        PopupMenuItem(
-                                          value: 'delete',
-                                          child: Text('Delete'),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              );
-                            },
-                          ),
+                        : const Text('Downloads',
+                            style: TextStyle(fontWeight: FontWeight.w600)),
+                    actions: [
+                      IconButton(
+                        icon: const Icon(Icons.settings_outlined),
+                        onPressed: () {
+                          Navigator.pop(pageCtx);
+                          _openFullScreenSettingsPage();
+                        },
+                      ),
+                      IconButton(
+                        icon: Icon(
+                            showSearch ? Icons.search_off : Icons.search),
+                        onPressed: () => setDlPage(() {
+                          showSearch = !showSearch;
+                          if (!showSearch) searchQuery = '';
+                        }),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(pageCtx),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                  body: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              storageLabel,
+                              style:
+                                  TextStyle(fontSize: 12.5, color: p.subtext),
+                            ),
+                            const SizedBox(height: 6),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: LinearProgressIndicator(
+                                value: storageRatio,
+                                minHeight: 4,
+                                color: p.accent,
+                                backgroundColor: p.surfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        child: Row(
+                          children: filters.map((f) {
+                            final isSel = selectedFilter == f;
+                            IconData chipIcon = Icons.check;
+                            if (f == 'Videos') {
+                              chipIcon = Icons.videocam_outlined;
+                            }
+                            if (f == 'Images') chipIcon = Icons.image_outlined;
+                            if (f == 'Pages') chipIcon = Icons.public;
+                            if (f == 'Other') {
+                              chipIcon = Icons.insert_drive_file_outlined;
+                            }
+
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: FilterChip(
+                                selected: isSel,
+                                showCheckmark: false,
+                                avatar: Icon(chipIcon,
+                                    size: 17,
+                                    color: isSel ? p.accent : p.subtext),
+                                label: Text(
+                                  f,
+                                  style: TextStyle(
+                                    color: isSel ? p.accent : p.text,
+                                    fontWeight: isSel
+                                        ? FontWeight.w600
+                                        : FontWeight.normal,
+                                  ),
+                                ),
+                                selectedColor: p.accent.withAlpha(32),
+                                backgroundColor: p.surface,
+                                side: BorderSide(
+                                    color: isSel ? p.accent : p.border),
+                                onSelected: (_) =>
+                                    setDlPage(() => selectedFilter = f),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+
+                      Divider(height: 8, color: p.border),
+
+                      Expanded(
+                        child: filteredList.isEmpty
+                            ? Center(
+                                child: Text(
+                                  'Downloads you save appear here',
+                                  style: TextStyle(color: p.subtext),
+                                ),
+                              )
+                            : ListView.builder(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 8),
+                                itemCount: filteredList.length,
+                                itemBuilder: (_, i) {
+                                  final item = filteredList[i];
+                                  final showHeader = i == 0 ||
+                                      filteredList[i - 1].dateLabel !=
+                                          item.dateLabel;
+                                  final host =
+                                      Uri.tryParse(item.url)?.host ?? '';
+                                  final hasLocalImage =
+                                      item.category == 'Images' &&
+                                          item.filePath.isNotEmpty &&
+                                          File(item.filePath).existsSync();
+
+                                  return Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      if (showHeader)
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                              top: 12, bottom: 8),
+                                          child: Text(
+                                            item.dateLabel,
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                              color: p.subtext,
+                                            ),
+                                          ),
+                                        ),
+                                      ListTile(
+                                        contentPadding: EdgeInsets.zero,
+                                        leading: _buildDownloadLeadingWidget(
+                                            p, item, hasLocalImage),
+                                        title: Text(
+                                          item.title,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                              fontWeight: FontWeight.w500,
+                                              color: p.text),
+                                        ),
+                                        subtitle: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              item.isInProgress
+                                                  ? item.sizeLabel
+                                                  : (host.isNotEmpty
+                                                      ? '${item.sizeLabel} • $host'
+                                                      : item.sizeLabel),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: item.status == 'failed'
+                                                    ? Colors.redAccent
+                                                    : (item.isInProgress
+                                                        ? p.accent
+                                                        : p.subtext),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        onTap: () => _openDownloadEntry(item),
+                                        trailing: item.isInProgress
+                                            ? IconButton(
+                                                icon: Icon(Icons.close,
+                                                    color: p.subtext),
+                                                tooltip: 'Cancel download',
+                                                onPressed: () async {
+                                                  await _intentChannel
+                                                      .invokeMethod(
+                                                          'cancelDownload', {
+                                                    'downloadId':
+                                                        item.downloadId,
+                                                  });
+                                                  setState(() => _downloads
+                                                      .remove(item));
+                                                  _downloadsUpdateTick.value++;
+                                                  await _saveData();
+                                                },
+                                              )
+                                            : PopupMenuButton<String>(
+                                                color: p.menuBg,
+                                                icon: Icon(Icons.more_vert,
+                                                    color: p.subtext),
+                                                shape: RoundedRectangleBorder(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            14)),
+                                                onSelected: (val) async {
+                                                  if (val == 'open_with') {
+                                                    await _intentChannel
+                                                        .invokeMethod(
+                                                            'openWithSystem', {
+                                                      'filePath':
+                                                          item.filePath,
+                                                      'url': item.url,
+                                                    });
+                                                  } else if (val == 'share') {
+                                                    await _intentChannel
+                                                        .invokeMethod(
+                                                            'shareLink', {
+                                                      'url': item.url.isNotEmpty
+                                                          ? item.url
+                                                          : item.filePath,
+                                                      'title': item.title,
+                                                    });
+                                                  } else if (val == 'rename') {
+                                                    _promptRenameDownloadItem(
+                                                        item, setDlPage);
+                                                  } else if (val == 'delete') {
+                                                    await _intentChannel
+                                                        .invokeMethod(
+                                                            'deleteFileOnDisk',
+                                                            {
+                                                          'filePath':
+                                                              item.filePath,
+                                                        });
+                                                    setState(() => _downloads
+                                                        .remove(item));
+                                                    _downloadsUpdateTick
+                                                        .value++;
+                                                    await _saveData();
+                                                  }
+                                                },
+                                                itemBuilder: (_) => const [
+                                                  PopupMenuItem(
+                                                    value: 'open_with',
+                                                    child: Text('Open with...'),
+                                                  ),
+                                                  PopupMenuItem(
+                                                    value: 'share',
+                                                    child: Text('Share'),
+                                                  ),
+                                                  PopupMenuItem(
+                                                    value: 'rename',
+                                                    child: Text('Rename'),
+                                                  ),
+                                                  PopupMenuItem(
+                                                    value: 'delete',
+                                                    child: Text('Delete'),
+                                                  ),
+                                                ],
+                                              ),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
+                  ),
+                );
+              },
             );
           },
         ),
@@ -3174,18 +4217,89 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     );
   }
 
+  Widget _buildDownloadLeadingWidget(
+    ChromePalette p,
+    DownloadEntry item,
+    bool hasLocalImage,
+  ) {
+    // Chrome-style live circular progress ring when downloading
+    if (item.isInProgress) {
+      final pct = item.progress >= 0
+          ? '${(item.progress * 100).round().clamp(0, 100)}%'
+          : '';
+      return SizedBox(
+        width: 42,
+        height: 42,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            SizedBox(
+              width: 40,
+              height: 40,
+              child: CircularProgressIndicator(
+                value: item.progress >= 0 ? item.progress : null,
+                strokeWidth: 3.2,
+                color: p.accent,
+                backgroundColor: p.surfaceVariant,
+              ),
+            ),
+            if (pct.isNotEmpty)
+              Text(
+                pct,
+                style: TextStyle(
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w700,
+                  color: p.accent,
+                ),
+              )
+            else
+              Icon(Icons.arrow_downward, size: 17, color: p.accent),
+          ],
+        ),
+      );
+    }
+
+    if (hasLocalImage) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.file(
+          File(item.filePath),
+          width: 42,
+          height: 42,
+          fit: BoxFit.cover,
+        ),
+      );
+    }
+
+    return CircleAvatar(
+      radius: 21,
+      backgroundColor: p.surfaceVariant,
+      child: Icon(
+        item.status == 'failed'
+            ? Icons.error_outline
+            : (item.category == 'Pages'
+                ? Icons.public
+                : (item.category == 'Images'
+                    ? Icons.image_outlined
+                    : (item.category == 'Videos'
+                        ? Icons.videocam_outlined
+                        : Icons.insert_drive_file_outlined))),
+        color: item.status == 'failed' ? Colors.redAccent : p.accent,
+        size: 20,
+      ),
+    );
+  }
+
   void _promptRenameDownloadItem(
       DownloadEntry item, StateSetter setDlPage) {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     final ctrl = TextEditingController(text: item.title);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E232E),
-        title: const Text('Rename file'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-        ),
+        backgroundColor: p.menuBg,
+        title: Text('Rename file', style: TextStyle(color: p.text)),
+        content: TextField(controller: ctrl, autofocus: true),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -3204,6 +4318,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                   item.title = newName;
                   if (updatedPath != null) item.filePath = updatedPath;
                 });
+                _downloadsUpdateTick.value++;
                 setDlPage(() {});
                 await _saveData();
               }
@@ -3217,7 +4332,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   // ===========================================================================
-  // FULL-SCREEN CHROME HISTORY PAGE & DELETE BROWSING DATA (Video 2: 00:13 - 00:48)
+  // FULL-SCREEN CHROME HISTORY PAGE & DELETE BROWSING DATA
   // ===========================================================================
   void _openFullScreenHistoryPage() {
     String searchQuery = '';
@@ -3227,6 +4342,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       MaterialPageRoute(
         builder: (pageCtx) => StatefulBuilder(
           builder: (pageCtx, setHistPage) {
+            final p = ChromePalette.of(pageCtx);
             final filtered = _history.where((h) {
               if (searchQuery.trim().isEmpty) return true;
               final q = searchQuery.toLowerCase();
@@ -3235,16 +4351,19 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             }).toList();
 
             return Scaffold(
-              backgroundColor: const Color(0xFF12151C),
+              backgroundColor: p.bg,
               appBar: AppBar(
-                backgroundColor: const Color(0xFF12151C),
+                backgroundColor: p.bg,
+                foregroundColor: p.text,
                 automaticallyImplyLeading: false,
                 title: showSearch
                     ? TextField(
                         autofocus: true,
+                        style: TextStyle(color: p.text),
                         onChanged: (v) => setHistPage(() => searchQuery = v),
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           hintText: 'Search history...',
+                          hintStyle: TextStyle(color: p.subtext),
                           border: InputBorder.none,
                         ),
                       )
@@ -3274,14 +4393,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 children: [
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                    color: const Color(0xFF181C26),
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+                    color: p.surface,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           'You may see history from links opened in Study Browser.',
-                          style: TextStyle(fontSize: 12.5, color: Colors.white70),
+                          style: TextStyle(fontSize: 12.5, color: p.subtext),
                         ),
                         const SizedBox(height: 8),
                         InkWell(
@@ -3289,11 +4408,11 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                             await _openDeleteBrowsingDataDialog();
                             setHistPage(() {});
                           },
-                          child: const Text(
+                          child: Text(
                             'Delete browsing data...',
                             style: TextStyle(
                               fontSize: 13.5,
-                              color: Color(0xFFA8C7FA),
+                              color: p.accent,
                               decoration: TextDecoration.underline,
                             ),
                           ),
@@ -3303,10 +4422,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                   ),
                   Expanded(
                     child: filtered.isEmpty
-                        ? const Center(
+                        ? Center(
                             child: Text(
                               'No browsing history here',
-                              style: TextStyle(color: Colors.white54),
+                              style: TextStyle(color: p.subtext),
                             ),
                           )
                         : ListView.builder(
@@ -3331,10 +4450,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                           top: 10, bottom: 8),
                                       child: Text(
                                         item.dateGroup,
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w600,
-                                          color: Colors.white70,
+                                          color: p.subtext,
                                         ),
                                       ),
                                     ),
@@ -3342,14 +4461,13 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                     contentPadding: EdgeInsets.zero,
                                     leading: CircleAvatar(
                                       radius: 18,
-                                      backgroundColor:
-                                          const Color(0xFF1E232E),
+                                      backgroundColor: p.surfaceVariant,
                                       child: Text(
                                         host.isNotEmpty
                                             ? host[0].toUpperCase()
                                             : 'G',
-                                        style: const TextStyle(
-                                            color: Color(0xFFA8C7FA),
+                                        style: TextStyle(
+                                            color: p.accent,
                                             fontWeight: FontWeight.bold),
                                       ),
                                     ),
@@ -3357,17 +4475,18 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                       item.title,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(color: p.text),
                                     ),
                                     subtitle: Text(
-                                      host,
+                                      '$host • ${item.timestamp}',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 12, color: Colors.white54),
+                                      style: TextStyle(
+                                          fontSize: 12, color: p.subtext),
                                     ),
                                     trailing: IconButton(
-                                      icon: const Icon(Icons.cancel_outlined,
-                                          size: 20, color: Colors.white60),
+                                      icon: Icon(Icons.cancel_outlined,
+                                          size: 20, color: p.subtext),
                                       onPressed: () async {
                                         setState(() => _history.remove(item));
                                         setHistPage(() {});
@@ -3404,431 +4523,746 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (pageCtx) => StatefulBuilder(
-          builder: (pageCtx, setDelState) => Scaffold(
-            backgroundColor: const Color(0xFF12151C),
-            appBar: AppBar(
-              backgroundColor: const Color(0xFF12151C),
-              title: const Text('Delete browsing data'),
-            ),
-            body: ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Time range',
-                        style: TextStyle(color: Colors.white70)),
-                    DropdownButton<String>(
-                      value: timeRange,
-                      dropdownColor: const Color(0xFF1E232E),
-                      underline: const SizedBox(),
-                      items: const [
-                        DropdownMenuItem(
-                            value: 'Last 15 minutes',
-                            child: Text('Last 15 minutes')),
-                        DropdownMenuItem(
-                            value: 'Last hour', child: Text('Last hour')),
-                        DropdownMenuItem(
-                            value: 'Last 24 hours',
-                            child: Text('Last 24 hours')),
-                        DropdownMenuItem(
-                            value: 'Last 7 days', child: Text('Last 7 days')),
-                        DropdownMenuItem(
-                            value: 'All time', child: Text('All time')),
-                      ],
-                      onChanged: (v) {
-                        if (v != null) setDelState(() => timeRange = v);
-                      },
-                    ),
-                  ],
-                ),
-                const Divider(height: 24),
-                CheckboxListTile(
-                  secondary: const Icon(Icons.history),
-                  title: const Text('Browsing history'),
-                  subtitle: Text('${_history.length} items recorded'),
-                  value: delHistory,
-                  onChanged: (v) =>
-                      setDelState(() => delHistory = v ?? true),
-                ),
-                CheckboxListTile(
-                  secondary: const Icon(Icons.cookie_outlined),
-                  title: const Text('Cookies and site data'),
-                  subtitle: const Text('Signs you out of most sites'),
-                  value: delCookies,
-                  onChanged: (v) =>
-                      setDelState(() => delCookies = v ?? true),
-                ),
-                CheckboxListTile(
-                  secondary: const Icon(Icons.image_outlined),
-                  title: const Text('Cached images and files'),
-                  subtitle: const Text('Frees up WebView storage'),
-                  value: delCache,
-                  onChanged: (v) => setDelState(() => delCache = v ?? true),
-                ),
-                CheckboxListTile(
-                  secondary: const Icon(Icons.tab_outlined),
-                  title: const Text('Close open tabs'),
-                  subtitle: Text('${_tabs.length} tabs currently open'),
-                  value: delTabs,
-                  onChanged: (v) => setDelState(() => delTabs = v ?? false),
-                ),
-                CheckboxListTile(
-                  secondary: const Icon(Icons.edit_outlined),
-                  title: const Text('Autofill form data'),
-                  subtitle: const Text('Clears form entries'),
-                  value: delAutofill,
-                  onChanged: (v) =>
-                      setDelState(() => delAutofill = v ?? true),
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Note: Your Focus & Lock passwords and Whitelist rules will NOT be deleted.',
-                  style: TextStyle(fontSize: 12.5, color: Colors.white54),
-                ),
-                const SizedBox(height: 28),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: FilledButton(
-                    onPressed: () async {
-                      if (delHistory) {
-                        setState(() => _history.clear());
-                      }
-                      if (delCookies) {
-                        await _webController.clearLocalStorage();
-                      }
-                      if (delCache) {
-                        await _webController.clearCache();
-                      }
-                      if (delTabs) {
-                        setState(() {
-                          _tabs = [
-                            BrowserTab(
-                              id: DateTime.now()
-                                  .millisecondsSinceEpoch
-                                  .toString(),
-                              title: 'New Tab',
-                              url: _homepageUrl,
-                            )
-                          ];
-                          _activeTabIndex = 0;
-                        });
-                      }
-                      await _saveData();
-                      if (mounted) Navigator.pop(pageCtx);
-                      _showToast('Browsing data ($timeRange) साफ़ कर दिया गया');
-                    },
-                    child: const Text('Delete data'),
+          builder: (pageCtx, setDelState) {
+            final p = ChromePalette.of(pageCtx);
+            return Scaffold(
+              backgroundColor: p.bg,
+              appBar: AppBar(
+                backgroundColor: p.bg,
+                foregroundColor: p.text,
+                title: const Text('Delete browsing data'),
+              ),
+              body: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Time range', style: TextStyle(color: p.subtext)),
+                      DropdownButton<String>(
+                        value: timeRange,
+                        dropdownColor: p.menuBg,
+                        underline: const SizedBox(),
+                        items: const [
+                          DropdownMenuItem(
+                              value: 'Last 15 minutes',
+                              child: Text('Last 15 minutes')),
+                          DropdownMenuItem(
+                              value: 'Last hour', child: Text('Last hour')),
+                          DropdownMenuItem(
+                              value: 'Last 24 hours',
+                              child: Text('Last 24 hours')),
+                          DropdownMenuItem(
+                              value: 'Last 7 days', child: Text('Last 7 days')),
+                          DropdownMenuItem(
+                              value: 'All time', child: Text('All time')),
+                        ],
+                        onChanged: (v) {
+                          if (v != null) setDelState(() => timeRange = v);
+                        },
+                      ),
+                    ],
                   ),
-                ),
-              ],
-            ),
-          ),
+                  Divider(height: 24, color: p.border),
+                  CheckboxListTile(
+                    secondary: const Icon(Icons.history),
+                    title: const Text('Browsing history'),
+                    subtitle: Text('${_history.length} items recorded'),
+                    value: delHistory,
+                    onChanged: (v) =>
+                        setDelState(() => delHistory = v ?? true),
+                  ),
+                  CheckboxListTile(
+                    secondary: const Icon(Icons.cookie_outlined),
+                    title: const Text('Cookies and site data'),
+                    subtitle: const Text('Signs you out of most sites'),
+                    value: delCookies,
+                    onChanged: (v) =>
+                        setDelState(() => delCookies = v ?? true),
+                  ),
+                  CheckboxListTile(
+                    secondary: const Icon(Icons.image_outlined),
+                    title: const Text('Cached images and files'),
+                    subtitle: const Text('Frees up WebView storage'),
+                    value: delCache,
+                    onChanged: (v) => setDelState(() => delCache = v ?? true),
+                  ),
+                  CheckboxListTile(
+                    secondary: const Icon(Icons.tab_outlined),
+                    title: const Text('Close open tabs'),
+                    subtitle: Text('${_tabs.length} tabs currently open'),
+                    value: delTabs,
+                    onChanged: (v) => setDelState(() => delTabs = v ?? false),
+                  ),
+                  CheckboxListTile(
+                    secondary: const Icon(Icons.edit_outlined),
+                    title: const Text('Autofill form data'),
+                    subtitle: const Text('Clears form entries & searches'),
+                    value: delAutofill,
+                    onChanged: (v) =>
+                        setDelState(() => delAutofill = v ?? true),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Note: Your Focus & Lock passwords and Whitelist rules will NOT be deleted.',
+                    style: TextStyle(fontSize: 12.5, color: p.subtext),
+                  ),
+                  const SizedBox(height: 28),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton(
+                      onPressed: () async {
+                        final nowMs = DateTime.now().millisecondsSinceEpoch;
+                        int cutoffMs = 0;
+                        if (timeRange == 'Last 15 minutes') {
+                          cutoffMs = nowMs - const Duration(minutes: 15).inMilliseconds;
+                        } else if (timeRange == 'Last hour') {
+                          cutoffMs = nowMs - const Duration(hours: 1).inMilliseconds;
+                        } else if (timeRange == 'Last 24 hours') {
+                          cutoffMs = nowMs - const Duration(hours: 24).inMilliseconds;
+                        } else if (timeRange == 'Last 7 days') {
+                          cutoffMs = nowMs - const Duration(days: 7).inMilliseconds;
+                        }
+
+                        if (delHistory) {
+                          setState(() {
+                            if (timeRange == 'All time') {
+                              _history.clear();
+                            } else {
+                              _history.removeWhere(
+                                  (h) => h.visitEpochMs >= cutoffMs);
+                            }
+                          });
+                        }
+                        if (delAutofill) {
+                          setState(() => _recentSearches.clear());
+                        }
+                        if (delCookies) {
+                          await _webController.clearLocalStorage();
+                        }
+                        if (delCache) {
+                          await _webController.clearCache();
+                        }
+                        if (delTabs) {
+                          setState(() {
+                            _tabs = [
+                              BrowserTab(
+                                id: DateTime.now()
+                                    .millisecondsSinceEpoch
+                                    .toString(),
+                                title: 'New Tab',
+                                url: _homepageUrl,
+                              )
+                            ];
+                            _activeTabIndex = 0;
+                          });
+                        }
+                        await _saveData();
+                        if (mounted) Navigator.pop(pageCtx);
+                        _showToast('Browsing data ($timeRange) साफ़ कर दिया गया');
+                      },
+                      child: const Text('Delete data'),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
         ),
       ),
     );
   }
 
   // ===========================================================================
-  // FULL-SCREEN RECENT TABS, BOOKMARKS, SETTINGS & HELP PAGES
+  // FULL-SCREEN RECENT TABS, BOOKMARKS (VISUAL/COMPACT + SORT), SETTINGS & HELP
   // ===========================================================================
   void _openFullScreenRecentTabsPage() {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (pageCtx) => Scaffold(
-          backgroundColor: const Color(0xFF12151C),
-          appBar: AppBar(
-            backgroundColor: const Color(0xFF12151C),
-            title: const Text('Recent tabs'),
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: () => Navigator.pop(pageCtx),
-              ),
-            ],
-          ),
-          body: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              const Text(
-                'Recently closed',
-                style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white70),
-              ),
-              const SizedBox(height: 8),
-              if (_recentlyClosedTabs.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 16),
-                  child: Text('No recently closed tabs',
-                      style: TextStyle(color: Colors.white54)),
-                )
-              else
-                ..._recentlyClosedTabs.map((t) => ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const CircleAvatar(
-                        backgroundColor: Color(0xFF1E232E),
-                        child:
-                            Icon(Icons.public, color: Color(0xFFA8C7FA), size: 18),
-                      ),
-                      title: Text(t.title,
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text(t.url,
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                      onTap: () {
-                        Navigator.pop(pageCtx);
-                        _createNewTab(incognito: false, url: t.url);
-                      },
-                    )),
-              const Divider(height: 28),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const CircleAvatar(
-                  backgroundColor: Color(0xFF1E232E),
-                  child: Icon(Icons.history, color: Color(0xFFA8C7FA)),
-                ),
-                title: const Text('Show full history'),
-                onTap: () {
-                  Navigator.pop(pageCtx);
-                  _openFullScreenHistoryPage();
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _openFullScreenBookmarksPage() {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (pageCtx) => StatefulBuilder(
-          builder: (pageCtx, setBmPage) => Scaffold(
-            backgroundColor: const Color(0xFF12151C),
+        builder: (pageCtx) {
+          final p = ChromePalette.of(pageCtx);
+          return Scaffold(
+            backgroundColor: p.bg,
             appBar: AppBar(
-              backgroundColor: const Color(0xFF12151C),
-              title: const Text('Bookmarks'),
+              backgroundColor: p.bg,
+              foregroundColor: p.text,
+              title: const Text('Recent tabs'),
               actions: [
-                IconButton(
-                  icon: const Icon(Icons.bookmark_add_outlined),
-                  tooltip: 'Bookmark current page',
-                  onPressed: () async {
-                    await _toggleCurrentBookmark();
-                    setBmPage(() {});
-                  },
-                ),
                 IconButton(
                   icon: const Icon(Icons.close),
                   onPressed: () => Navigator.pop(pageCtx),
                 ),
               ],
             ),
-            body: _bookmarks.isEmpty
-                ? const Center(
-                    child: Text('No bookmarks saved yet',
-                        style: TextStyle(color: Colors.white54)),
+            body: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Text(
+                  'Recently closed',
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: p.subtext),
+                ),
+                const SizedBox(height: 8),
+                if (_recentlyClosedTabs.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Text('No recently closed tabs',
+                        style: TextStyle(color: p.subtext)),
                   )
-                : ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _bookmarks.length,
-                    itemBuilder: (_, i) {
-                      final bm = _bookmarks[i];
-                      return ListTile(
+                else
+                  ..._recentlyClosedTabs.map((t) => ListTile(
                         contentPadding: EdgeInsets.zero,
-                        leading: const CircleAvatar(
-                          backgroundColor: Color(0xFF1E232E),
-                          child: Icon(Icons.star,
-                              color: Color(0xFFA8C7FA), size: 18),
+                        leading: CircleAvatar(
+                          backgroundColor: p.surfaceVariant,
+                          child: Icon(Icons.public, color: p.accent, size: 18),
                         ),
-                        title: Text(bm.title,
-                            maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: Text(bm.url,
-                            maxLines: 1, overflow: TextOverflow.ellipsis),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.delete_outline),
-                          onPressed: () async {
-                            setState(() => _bookmarks.removeAt(i));
-                            setBmPage(() {});
-                            await _saveData();
-                          },
-                        ),
+                        title: Text(t.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: p.text)),
+                        subtitle: Text(t.url,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: p.subtext)),
                         onTap: () {
                           Navigator.pop(pageCtx);
-                          _loadFromSearchBar(bm.url);
+                          _createNewTab(incognito: false, url: t.url);
                         },
-                      );
+                      )),
+                Divider(height: 28, color: p.border),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: CircleAvatar(
+                    backgroundColor: p.surfaceVariant,
+                    child: Icon(Icons.history, color: p.accent),
+                  ),
+                  title: Text('Show full history',
+                      style: TextStyle(color: p.text)),
+                  onTap: () {
+                    Navigator.pop(pageCtx);
+                    _openFullScreenHistoryPage();
+                  },
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _openFullScreenBookmarksPage() {
+    String searchQuery = '';
+    bool readingListOnly = false;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (pageCtx) => StatefulBuilder(
+          builder: (pageCtx, setBmPage) {
+            final p = ChromePalette.of(pageCtx);
+            final list = _bookmarks.where((b) {
+              if (b.isReadingList != readingListOnly) return false;
+              if (searchQuery.trim().isNotEmpty) {
+                final q = searchQuery.toLowerCase();
+                return b.title.toLowerCase().contains(q) ||
+                    b.url.toLowerCase().contains(q);
+              }
+              return true;
+            }).toList();
+
+            if (_bookmarkSortOrder == 'newest') {
+              list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+            } else if (_bookmarkSortOrder == 'oldest') {
+              list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+            } else if (_bookmarkSortOrder == 'az') {
+              list.sort((a, b) =>
+                  a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+            } else if (_bookmarkSortOrder == 'za') {
+              list.sort((a, b) =>
+                  b.title.toLowerCase().compareTo(a.title.toLowerCase()));
+            }
+
+            return Scaffold(
+              backgroundColor: p.bg,
+              appBar: AppBar(
+                backgroundColor: p.bg,
+                foregroundColor: p.text,
+                title: Text(readingListOnly ? 'Reading list' : 'Bookmarks'),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.bookmark_add_outlined),
+                    tooltip: 'Bookmark current page',
+                    onPressed: () async {
+                      await _toggleCurrentBookmark();
+                      setBmPage(() {});
                     },
                   ),
-          ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(pageCtx),
+                  ),
+                ],
+              ),
+              body: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                    child: Container(
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: p.addressBar,
+                        borderRadius: BorderRadius.circular(22),
+                      ),
+                      child: TextField(
+                        style: TextStyle(color: p.text),
+                        onChanged: (v) => setBmPage(() => searchQuery = v),
+                        decoration: InputDecoration(
+                          hintText: 'Search your bookmarks',
+                          hintStyle: TextStyle(color: p.subtext),
+                          prefixIcon:
+                              Icon(Icons.search, size: 20, color: p.subtext),
+                          border: InputBorder.none,
+                          contentPadding:
+                              const EdgeInsets.symmetric(vertical: 11),
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Folder tabs + Sort + Visual/Compact toggle row
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        ChoiceChip(
+                          label: const Text('Mobile'),
+                          selected: !readingListOnly,
+                          onSelected: (_) =>
+                              setBmPage(() => readingListOnly = false),
+                        ),
+                        const SizedBox(width: 8),
+                        ChoiceChip(
+                          label: const Text('Reading list'),
+                          selected: readingListOnly,
+                          onSelected: (_) =>
+                              setBmPage(() => readingListOnly = true),
+                        ),
+                        const Spacer(),
+                        PopupMenuButton<String>(
+                          color: p.menuBg,
+                          tooltip: 'Sort bookmarks',
+                          icon: Icon(Icons.sort, color: p.subtext, size: 20),
+                          onSelected: (v) {
+                            setState(() => _bookmarkSortOrder = v);
+                            setBmPage(() {});
+                            _saveData();
+                          },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(
+                                value: 'manual', child: Text('Manual')),
+                            PopupMenuItem(
+                                value: 'newest', child: Text('Newest first')),
+                            PopupMenuItem(
+                                value: 'oldest', child: Text('Oldest first')),
+                            PopupMenuItem(value: 'az', child: Text('A to Z')),
+                            PopupMenuItem(value: 'za', child: Text('Z to A')),
+                          ],
+                        ),
+                        IconButton(
+                          icon: Icon(
+                            _bookmarkVisualView
+                                ? Icons.view_list_outlined
+                                : Icons.view_agenda_outlined,
+                            color: p.subtext,
+                            size: 20,
+                          ),
+                          tooltip: _bookmarkVisualView
+                              ? 'Compact view'
+                              : 'Visual view',
+                          onPressed: () {
+                            setState(() =>
+                                _bookmarkVisualView = !_bookmarkVisualView);
+                            setBmPage(() {});
+                            _saveData();
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                  Divider(height: 12, color: p.border),
+                  Expanded(
+                    child: list.isEmpty
+                        ? Center(
+                            child: Text('No bookmarks saved here',
+                                style: TextStyle(color: p.subtext)),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 6),
+                            itemCount: list.length,
+                            itemBuilder: (_, i) {
+                              final bm = list[i];
+                              final host =
+                                  Uri.tryParse(bm.url)?.host ?? bm.url;
+                              return Container(
+                                margin: EdgeInsets.only(
+                                    bottom: _bookmarkVisualView ? 10 : 2),
+                                decoration: _bookmarkVisualView
+                                    ? BoxDecoration(
+                                        color: p.card,
+                                        borderRadius: BorderRadius.circular(14),
+                                        border: Border.all(color: p.border),
+                                      )
+                                    : null,
+                                child: ListTile(
+                                  dense: !_bookmarkVisualView,
+                                  leading: CircleAvatar(
+                                    radius: _bookmarkVisualView ? 20 : 16,
+                                    backgroundColor: p.surfaceVariant,
+                                    child: Icon(Icons.star,
+                                        color: p.accent,
+                                        size: _bookmarkVisualView ? 20 : 16),
+                                  ),
+                                  title: Text(bm.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          color: p.text,
+                                          fontWeight: FontWeight.w500)),
+                                  subtitle: Text(host,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          fontSize: 12, color: p.subtext)),
+                                  trailing: PopupMenuButton<String>(
+                                    color: p.menuBg,
+                                    icon: Icon(Icons.more_vert,
+                                        size: 19, color: p.subtext),
+                                    onSelected: (val) async {
+                                      if (val == 'new_tab') {
+                                        Navigator.pop(pageCtx);
+                                        _createNewTab(url: bm.url);
+                                      } else if (val == 'move') {
+                                        setState(() => bm.isReadingList =
+                                            !bm.isReadingList);
+                                        setBmPage(() {});
+                                        await _saveData();
+                                      } else if (val == 'delete') {
+                                        setState(() => _bookmarks.remove(bm));
+                                        setBmPage(() {});
+                                        await _saveData();
+                                      }
+                                    },
+                                    itemBuilder: (_) => [
+                                      const PopupMenuItem(
+                                          value: 'new_tab',
+                                          child: Text('Open in new tab')),
+                                      PopupMenuItem(
+                                          value: 'move',
+                                          child: Text(bm.isReadingList
+                                              ? 'Move to Mobile bookmarks'
+                                              : 'Move to Reading list')),
+                                      const PopupMenuItem(
+                                          value: 'delete',
+                                          child: Text('Delete')),
+                                    ],
+                                  ),
+                                  onTap: () {
+                                    Navigator.pop(pageCtx);
+                                    _loadFromSearchBar(bm.url);
+                                  },
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            );
+          },
         ),
       ),
     );
   }
 
-  void _openFullScreenSettingsPage() {
+  Future<void> _openFullScreenSettingsPage() async {
+    String dlPath = '/storage/emulated/0/Download';
+    try {
+      final res = await _intentChannel.invokeMethod<String>('getDownloadLocation');
+      if (res != null && res.isNotEmpty) dlPath = res;
+    } catch (_) {}
+    if (!mounted) return;
+
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (pageCtx) => StatefulBuilder(
-          builder: (pageCtx, setSettingsState) => Scaffold(
-            backgroundColor: const Color(0xFF12151C),
-            appBar: AppBar(
-              backgroundColor: const Color(0xFF12151C),
-              title: const Text('Settings'),
-            ),
-            body: ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                _buildSettingsCard(
-                  title: 'Default browser',
-                  subtitle: 'Set Study Browser as your system default browser',
-                  icon: Icons.open_in_browser,
-                  onTap: () {
-                    _intentChannel.invokeMethod('openDefaultAppsSettings');
-                  },
-                ),
-                _buildSettingsCard(
-                  title: 'Search engine',
-                  subtitle: _searchEngineUrl.contains('duckduckgo')
-                      ? 'DuckDuckGo'
-                      : (_searchEngineUrl.contains('bing')
-                          ? 'Microsoft Bing'
-                          : 'Google'),
-                  icon: Icons.search,
-                  onTap: () {
-                    showModalBottomSheet(
-                      context: context,
-                      backgroundColor: const Color(0xFF1E232E),
-                      builder: (ctx) => Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          ListTile(
-                            title: const Text('Google (Default)'),
-                            onTap: () {
-                              setState(() => _searchEngineUrl =
-                                  'https://www.google.com/search?q=');
-                              setSettingsState(() {});
-                              _saveData();
-                              Navigator.pop(ctx);
-                            },
-                          ),
-                          ListTile(
-                            title: const Text('DuckDuckGo'),
-                            onTap: () {
-                              setState(() => _searchEngineUrl =
-                                  'https://duckduckgo.com/?q=');
-                              setSettingsState(() {});
-                              _saveData();
-                              Navigator.pop(ctx);
-                            },
-                          ),
-                          ListTile(
-                            title: const Text('Bing'),
-                            onTap: () {
-                              setState(() => _searchEngineUrl =
-                                  'https://www.bing.com/search?q=');
-                              setSettingsState(() {});
-                              _saveData();
-                              Navigator.pop(ctx);
-                            },
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 10),
-                  child: Text('Advanced',
-                      style: TextStyle(
-                          color: Color(0xFFA8C7FA),
-                          fontWeight: FontWeight.w600)),
-                ),
-                _buildSettingsCard(
-                  title: 'Tabs and tab groups',
-                  subtitle: '${_tabs.length} open tabs • Auto-restore enabled',
-                  icon: Icons.layers_outlined,
-                  onTap: () {
-                    Navigator.pop(pageCtx);
-                    _openFullScreenTabSwitcher();
-                  },
-                ),
-                _buildSettingsCard(
-                  title: 'Homepage',
-                  subtitle: 'On • $_homepageUrl',
-                  icon: Icons.home_outlined,
-                  onTap: () {
-                    final ctrl = TextEditingController(text: _homepageUrl);
-                    showDialog(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        backgroundColor: const Color(0xFF1E232E),
-                        title: const Text('Homepage URL'),
-                        content: TextField(controller: ctrl),
-                        actions: [
-                          TextButton(
-                              onPressed: () => Navigator.pop(ctx),
-                              child: const Text('Cancel')),
-                          FilledButton(
-                            onPressed: () {
-                              setState(
-                                  () => _homepageUrl = ctrl.text.trim());
-                              setSettingsState(() {});
-                              _saveData();
-                              Navigator.pop(ctx);
-                            },
-                            child: const Text('Save'),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-                _buildSettingsCard(
-                  title: 'Focus & Lock Security',
-                  subtitle:
-                      'Manage YouTube Shorts, Instagram Reels & Group Locks',
-                  icon: Icons.shield_outlined,
-                  onTap: () {
-                    Navigator.pop(pageCtx);
-                    _openLockManagerSheet();
-                  },
-                ),
-                _buildSettingsCard(
-                  title: 'Site settings',
-                  subtitle:
-                      'Desktop mode: ${_isDesktopMode ? "On" : "Off"} • Default Zoom: $_zoomPercent%',
-                  icon: Icons.tune,
-                  onTap: () {
-                    _toggleDesktopMode();
-                    setSettingsState(() {});
-                  },
-                ),
-                _buildSettingsCard(
-                  title: 'Downloads',
-                  subtitle: '/storage/emulated/0/Download',
-                  icon: Icons.download_done_outlined,
-                  onTap: () {
-                    Navigator.pop(pageCtx);
-                    _openFullScreenDownloadsPage();
-                  },
-                ),
-                _buildSettingsCard(
-                  title: 'About Study Browser',
-                  subtitle: 'Version 2.0.0 • Chrome Dark UI + Focus Vault',
-                  icon: Icons.info_outline,
-                  onTap: () {},
-                ),
-              ],
-            ),
-          ),
+          builder: (pageCtx, setSettingsState) {
+            final p = ChromePalette.of(pageCtx);
+            final themeLabel = _themePreference == 'light'
+                ? 'Light'
+                : (_themePreference == 'dark' ? 'Dark' : 'System default');
+
+            return Scaffold(
+              backgroundColor: p.bg,
+              appBar: AppBar(
+                backgroundColor: p.bg,
+                foregroundColor: p.text,
+                title: const Text('Settings'),
+              ),
+              body: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  _buildSettingsCard(
+                    p: p,
+                    title: 'Default browser',
+                    subtitle: 'Set Study Browser as your system default browser',
+                    icon: Icons.open_in_browser,
+                    onTap: () {
+                      _intentChannel.invokeMethod('openDefaultAppsSettings');
+                    },
+                  ),
+                  _buildSettingsCard(
+                    p: p,
+                    title: 'Theme',
+                    subtitle: themeLabel,
+                    icon: Icons.brightness_6_outlined,
+                    onTap: () async {
+                      await _openThemeSettingsPage();
+                      setSettingsState(() {});
+                    },
+                  ),
+                  _buildSettingsCard(
+                    p: p,
+                    title: 'Search engine',
+                    subtitle: _searchEngineUrl.contains('duckduckgo')
+                        ? 'DuckDuckGo'
+                        : (_searchEngineUrl.contains('bing')
+                            ? 'Microsoft Bing'
+                            : 'Google'),
+                    icon: Icons.search,
+                    onTap: () {
+                      showModalBottomSheet(
+                        context: context,
+                        backgroundColor: p.menuBg,
+                        builder: (ctx) => Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            ListTile(
+                              title: const Text('Google (Default)'),
+                              onTap: () {
+                                setState(() => _searchEngineUrl =
+                                    'https://www.google.com/search?q=');
+                                setSettingsState(() {});
+                                _saveData();
+                                Navigator.pop(ctx);
+                              },
+                            ),
+                            ListTile(
+                              title: const Text('DuckDuckGo'),
+                              onTap: () {
+                                setState(() => _searchEngineUrl =
+                                    'https://duckduckgo.com/?q=');
+                                setSettingsState(() {});
+                                _saveData();
+                                Navigator.pop(ctx);
+                              },
+                            ),
+                            ListTile(
+                              title: const Text('Bing'),
+                              onTap: () {
+                                setState(() => _searchEngineUrl =
+                                    'https://www.bing.com/search?q=');
+                                setSettingsState(() {});
+                                _saveData();
+                                Navigator.pop(ctx);
+                              },
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Text('Advanced',
+                        style: TextStyle(
+                            color: p.accent, fontWeight: FontWeight.w600)),
+                  ),
+                  _buildSettingsCard(
+                    p: p,
+                    title: 'Tabs and tab groups',
+                    subtitle: '${_tabs.length} open tabs • Auto-restore enabled',
+                    icon: Icons.layers_outlined,
+                    onTap: () {
+                      Navigator.pop(pageCtx);
+                      _openFullScreenTabSwitcher();
+                    },
+                  ),
+                  _buildSettingsCard(
+                    p: p,
+                    title: 'Homepage',
+                    subtitle: 'On • $_homepageUrl',
+                    icon: Icons.home_outlined,
+                    onTap: () {
+                      final ctrl = TextEditingController(text: _homepageUrl);
+                      showDialog(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          backgroundColor: p.menuBg,
+                          title: const Text('Homepage URL'),
+                          content: TextField(controller: ctrl),
+                          actions: [
+                            TextButton(
+                                onPressed: () => Navigator.pop(ctx),
+                                child: const Text('Cancel')),
+                            FilledButton(
+                              onPressed: () {
+                                setState(
+                                    () => _homepageUrl = ctrl.text.trim());
+                                setSettingsState(() {});
+                                _saveData();
+                                Navigator.pop(ctx);
+                              },
+                              child: const Text('Save'),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                  _buildSettingsCard(
+                    p: p,
+                    title: 'Focus & Lock Security',
+                    subtitle:
+                        'Manage YouTube Shorts, Instagram Reels & Group Locks',
+                    icon: Icons.shield_outlined,
+                    onTap: () {
+                      Navigator.pop(pageCtx);
+                      _openLockManagerSheet();
+                    },
+                  ),
+                  _buildSettingsCard(
+                    p: p,
+                    title: 'Site settings',
+                    subtitle:
+                        'Desktop mode: ${_isDesktopMode ? "On" : "Off"} • Default Zoom: $_zoomPercent%',
+                    icon: Icons.tune,
+                    onTap: () {
+                      _toggleDesktopMode();
+                      setSettingsState(() {});
+                    },
+                  ),
+                  _buildSettingsCard(
+                    p: p,
+                    title: 'Downloads',
+                    subtitle: dlPath,
+                    icon: Icons.download_done_outlined,
+                    onTap: () {
+                      Navigator.pop(pageCtx);
+                      _openFullScreenDownloadsPage();
+                    },
+                  ),
+                  _buildSettingsCard(
+                    p: p,
+                    title: 'About Study Browser',
+                    subtitle: 'Version 3.0.0 • Chrome Light/Dark UI + Focus Vault',
+                    icon: Icons.info_outline,
+                    onTap: () {},
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openThemeSettingsPage() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (pageCtx) => StatefulBuilder(
+          builder: (pageCtx, setThemePage) {
+            final p = ChromePalette.of(pageCtx);
+            return Scaffold(
+              backgroundColor: p.bg,
+              appBar: AppBar(
+                backgroundColor: p.bg,
+                foregroundColor: p.text,
+                title: const Text('Theme'),
+              ),
+              body: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                children: [
+                  RadioListTile<String>(
+                    value: 'system',
+                    groupValue: _themePreference,
+                    activeColor: p.accent,
+                    title: Text('System default',
+                        style: TextStyle(color: p.text)),
+                    subtitle: Text(
+                        'Turn on Dark theme when your device\'s Dark theme or Battery Saver is on',
+                        style: TextStyle(color: p.subtext, fontSize: 12.5)),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() => _applyThemePreference(val));
+                        setThemePage(() {});
+                      }
+                    },
+                  ),
+                  RadioListTile<String>(
+                    value: 'light',
+                    groupValue: _themePreference,
+                    activeColor: p.accent,
+                    title: Text('Light', style: TextStyle(color: p.text)),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() => _applyThemePreference(val));
+                        setThemePage(() {});
+                      }
+                    },
+                  ),
+                  RadioListTile<String>(
+                    value: 'dark',
+                    groupValue: _themePreference,
+                    activeColor: p.accent,
+                    title: Text('Dark', style: TextStyle(color: p.text)),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() => _applyThemePreference(val));
+                        setThemePage(() {});
+                      }
+                    },
+                  ),
+                  Divider(height: 24, color: p.border),
+                  CheckboxListTile(
+                    value: _darkenWebsitesInDark,
+                    activeColor: p.accent,
+                    title: Text('Apply Dark theme to sites, when possible',
+                        style: TextStyle(color: p.text)),
+                    subtitle: Text(
+                      'Forces dark colors on web pages when Dark theme is active',
+                      style: TextStyle(color: p.subtext, fontSize: 12.5),
+                    ),
+                    onChanged: (v) {
+                      setState(() => _darkenWebsitesInDark = v ?? false);
+                      setThemePage(() {});
+                      _syncWebViewTheme();
+                      _saveData();
+                    },
+                  ),
+                ],
+              ),
+            );
+          },
         ),
       ),
     );
   }
 
   Widget _buildSettingsCard({
+    required ChromePalette p,
     required String title,
     required String subtitle,
     required IconData icon,
@@ -3837,14 +5271,16 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E232E),
+        color: p.card,
         borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: p.border),
       ),
       child: ListTile(
-        leading: Icon(icon, color: const Color(0xFFA8C7FA)),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w500)),
+        leading: Icon(icon, color: p.accent),
+        title: Text(title,
+            style: TextStyle(fontWeight: FontWeight.w500, color: p.text)),
         subtitle: Text(subtitle,
-            style: const TextStyle(fontSize: 12, color: Colors.white60)),
+            style: TextStyle(fontSize: 12, color: p.subtext)),
         onTap: onTap,
       ),
     );
@@ -3853,61 +5289,75 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   void _openFullScreenHelpPage() {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (pageCtx) => Scaffold(
-          backgroundColor: const Color(0xFF12151C),
-          appBar: AppBar(
-            backgroundColor: const Color(0xFF12151C),
-            title: const Text('Help & Feedback'),
-          ),
-          body: ListView(
-            padding: const EdgeInsets.all(16),
-            children: const [
-              Text(
-                'Popular help resources',
-                style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFFA8C7FA)),
-              ),
-              SizedBox(height: 12),
-              ListTile(
-                leading: Icon(Icons.article_outlined, color: Color(0xFFA8C7FA)),
-                title: Text('How Time-Vault & Focus Locks work'),
-                subtitle: Text(
-                    'Generate a 16-digit password, copy it to Chronocrypt Vault, and lock distracting sites or YouTube Shorts.'),
-              ),
-              Divider(),
-              ListTile(
-                leading: Icon(Icons.desktop_windows_outlined,
-                    color: Color(0xFFA8C7FA)),
-                title: Text('Using Desktop Site Mode'),
-                subtitle: Text(
-                    'Turn on Desktop site from the 3-dot menu to view full 1280px computer layouts on mobile.'),
-              ),
-              Divider(),
-              ListTile(
-                leading:
-                    Icon(Icons.add_to_home_screen, color: Color(0xFFA8C7FA)),
-                title: Text('Install & Create Home Screen Shortcuts'),
-                subtitle: Text(
-                    'Use "Install and create shortcut" in the 3-dot menu to pin any study web app directly to your Realme home screen.'),
-              ),
-              Divider(),
-              ListTile(
-                leading:
-                    Icon(Icons.download_done_outlined, color: Color(0xFFA8C7FA)),
-                title: Text('Opening Downloaded ZIP, PDF & Offline Pages'),
-                subtitle: Text(
-                    'Tap any file in Downloads to open it directly or choose an app (Files by Google, WPS Office) via Open With.'),
-              ),
-            ],
-          ),
-        ),
+        builder: (pageCtx) {
+          final p = ChromePalette.of(pageCtx);
+          return Scaffold(
+            backgroundColor: p.bg,
+            appBar: AppBar(
+              backgroundColor: p.bg,
+              foregroundColor: p.text,
+              title: const Text('Help & Feedback'),
+            ),
+            body: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Text(
+                  'Popular help resources',
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: p.accent),
+                ),
+                const SizedBox(height: 12),
+                ListTile(
+                  leading: Icon(Icons.article_outlined, color: p.accent),
+                  title: Text('How Time-Vault & Focus Locks work',
+                      style: TextStyle(color: p.text)),
+                  subtitle: Text(
+                    'Generate a 16-digit password, copy it to Chronocrypt Vault, and lock distracting sites or YouTube Shorts.',
+                    style: TextStyle(color: p.subtext),
+                  ),
+                ),
+                Divider(color: p.border),
+                ListTile(
+                  leading: Icon(Icons.brightness_6_outlined, color: p.accent),
+                  title: Text('Switch between Light, Dark & System theme',
+                      style: TextStyle(color: p.text)),
+                  subtitle: Text(
+                    'Open 3-dot Menu > Settings > Theme to switch between Light mode, Dark mode, or System default.',
+                    style: TextStyle(color: p.subtext),
+                  ),
+                ),
+                Divider(color: p.border),
+                ListTile(
+                  leading: Icon(Icons.image_outlined, color: p.accent),
+                  title: Text('Image Long-Press Menu',
+                      style: TextStyle(color: p.text)),
+                  subtitle: Text(
+                    'Touch and hold any image on a webpage to preview, copy, download, share, or search with Google Lens.',
+                    style: TextStyle(color: p.subtext),
+                  ),
+                ),
+                Divider(color: p.border),
+                ListTile(
+                  leading: Icon(Icons.code, color: p.accent),
+                  title: Text('View Webpage Source Code',
+                      style: TextStyle(color: p.text)),
+                  subtitle: Text(
+                    'Type view-source:https://example.com in the address bar to inspect HTML source code.',
+                    style: TextStyle(color: p.subtext),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
 
   void _openSiteControlsDialog() {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     final uri = Uri.tryParse(_currentUrl);
     final host = uri?.host ?? _currentUrl;
     final isSecure = _currentUrl.startsWith('https://');
@@ -3915,12 +5365,12 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E232E),
+        backgroundColor: p.menuBg,
         title: Row(
           children: [
             Icon(
               isSecure ? Icons.lock_outline : Icons.info_outline,
-              color: isSecure ? const Color(0xFF86EFAC) : Colors.amber,
+              color: isSecure ? const Color(0xFF1E8E3E) : Colors.amber,
               size: 20,
             ),
             const SizedBox(width: 8),
@@ -3929,7 +5379,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 host.isEmpty ? 'Site Controls' : host,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 16),
+                style: TextStyle(fontSize: 16, color: p.text),
               ),
             ),
           ],
@@ -3942,14 +5392,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
               isSecure
                   ? 'Connection is secure (HTTPS)'
                   : 'Unencrypted connection (HTTP)',
-              style: const TextStyle(fontSize: 13, color: Colors.white70),
+              style: TextStyle(fontSize: 13, color: p.subtext),
             ),
             const SizedBox(height: 8),
             Text(
               'Mode: ${_isDesktopMode ? "Desktop Site" : "Mobile Site"} • Zoom: $_zoomPercent%',
-              style: const TextStyle(fontSize: 13, color: Colors.white70),
+              style: TextStyle(fontSize: 13, color: p.subtext),
             ),
-            const Divider(height: 20),
+            Divider(height: 20, color: p.border),
             if (host.isNotEmpty && _lockGroups.isNotEmpty)
               SizedBox(
                 width: double.infinity,
@@ -3989,6 +5439,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     required String expectedHash,
     bool allowTempUnlock = true,
   }) async {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     final passCtrl = TextEditingController();
     String? errorText;
 
@@ -3996,19 +5447,19 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: const Color(0xFF1E232E),
+          backgroundColor: p.menuBg,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
-            side: const BorderSide(color: Color(0xFF2E3646)),
+            side: BorderSide(color: p.border),
           ),
-          title: Text(title, style: const TextStyle(fontSize: 17)),
+          title: Text(title, style: TextStyle(fontSize: 17, color: p.text)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'अनलॉक करने के लिए अपना पासवर्ड (Time-Vault से) दर्ज करें:',
-                style: TextStyle(fontSize: 13, color: Colors.white70),
+                style: TextStyle(fontSize: 13, color: p.subtext),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -4018,7 +5469,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                   hintText: 'पासवर्ड पेस्ट करें',
                   errorText: errorText,
                   filled: true,
-                  fillColor: const Color(0xFF12151C),
+                  fillColor: p.bg,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(10),
                   ),
@@ -4059,6 +5510,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   Future<String?> _promptSetNewPassword(String label) async {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     final passCtrl = TextEditingController();
     bool obscure = false;
 
@@ -4066,20 +5518,20 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: const Color(0xFF1E232E),
+          backgroundColor: p.menuBg,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
-            side: const BorderSide(color: Color(0xFF2E3646)),
+            side: BorderSide(color: p.border),
           ),
           title: Text('$label पर लॉक सेट करें',
-              style: const TextStyle(fontSize: 17)),
+              style: TextStyle(fontSize: 17, color: p.text)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'पासवर्ड लिखें या रैंडम पासवर्ड जनरेट करके अपने Time-Vault में लॉक कर दें:',
-                style: TextStyle(fontSize: 13, color: Colors.white70),
+                style: TextStyle(fontSize: 13, color: p.subtext),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -4088,7 +5540,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 decoration: InputDecoration(
                   hintText: 'कम से कम 4 अक्षर का पासवर्ड',
                   filled: true,
-                  fillColor: const Color(0xFF12151C),
+                  fillColor: p.bg,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(10),
                   ),
@@ -4143,10 +5595,11 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   void _openLockManagerSheet() {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF141821),
+      backgroundColor: p.bg,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -4201,22 +5654,23 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Row(
+                        Row(
                           children: [
                             Icon(Icons.shield_outlined,
-                                color: Color(0xFFA8C7FA), size: 22),
-                            SizedBox(width: 10),
+                                color: p.accent, size: 22),
+                            const SizedBox(width: 10),
                             Text(
                               'Focus & Lock Manager',
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w600,
+                                color: p.text,
                               ),
                             ),
                           ],
                         ),
                         IconButton(
-                          icon: const Icon(Icons.close, size: 20),
+                          icon: Icon(Icons.close, size: 20, color: p.text),
                           onPressed: () => Navigator.pop(ctx),
                         ),
                       ],
@@ -4226,20 +5680,22 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                     margin:
                         const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1E232E),
+                      color: p.surface,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFF2D3343)),
+                      border: Border.all(color: p.border),
                     ),
-                    child: const TabBar(
+                    child: TabBar(
                       indicatorSize: TabBarIndicatorSize.tab,
                       dividerColor: Colors.transparent,
-                      labelColor: Color(0xFF0F141C),
-                      unselectedLabelColor: Color(0xFFCBD5E1),
+                      labelColor:
+                          p.isDark ? const Color(0xFF1F1F1F) : Colors.white,
+                      unselectedLabelColor: p.subtext,
                       indicator: BoxDecoration(
-                        color: Color(0xFFA8C7FA),
-                        borderRadius: BorderRadius.all(Radius.circular(10)),
+                        color: p.accent,
+                        borderRadius:
+                            const BorderRadius.all(Radius.circular(10)),
                       ),
-                      tabs: [
+                      tabs: const [
                         Tab(text: 'Focus Controls'),
                         Tab(text: 'Site Lock Groups'),
                       ],
@@ -4256,10 +5712,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                             Container(
                               padding: const EdgeInsets.all(14),
                               decoration: BoxDecoration(
-                                color: const Color(0xFF1E232E),
+                                color: p.card,
                                 borderRadius: BorderRadius.circular(14),
-                                border: Border.all(
-                                    color: const Color(0xFF2E3646)),
+                                border: Border.all(color: p.border),
                               ),
                               child: Row(
                                 children: [
@@ -4268,8 +5723,8 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                         ? Icons.lock_outline
                                         : Icons.lock_open_outlined,
                                     color: _featurePassHash.isNotEmpty
-                                        ? const Color(0xFF86EFAC)
-                                        : const Color(0xFF94A3B8),
+                                        ? const Color(0xFF1E8E3E)
+                                        : p.subtext,
                                     size: 22,
                                   ),
                                   const SizedBox(width: 12),
@@ -4284,17 +5739,18 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                               : (_isFeatureLockActive
                                                   ? 'Password Protected'
                                                   : 'Unlocked (${_formatSeconds(_featureRemainingTempSeconds)} left)'),
-                                          style: const TextStyle(
+                                          style: TextStyle(
                                             fontWeight: FontWeight.w600,
                                             fontSize: 14.5,
+                                            color: p.text,
                                           ),
                                         ),
                                         const SizedBox(height: 2),
-                                        const Text(
+                                        Text(
                                           'लॉक ऑन करने के बाद बिना पासवर्ड कोई नियम बंद नहीं होगा',
                                           style: TextStyle(
                                             fontSize: 12,
-                                            color: Colors.white60,
+                                            color: p.subtext,
                                           ),
                                         ),
                                       ],
@@ -4343,20 +5799,20 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                             const SizedBox(height: 14),
                             Container(
                               decoration: BoxDecoration(
-                                color: const Color(0xFF1E232E),
+                                color: p.card,
                                 borderRadius: BorderRadius.circular(14),
-                                border: Border.all(
-                                    color: const Color(0xFF2E3646)),
+                                border: Border.all(color: p.border),
                               ),
                               child: Column(
                                 children: [
                                   SwitchListTile(
-                                    title: const Text('Block YouTube Shorts',
-                                        style: TextStyle(fontSize: 14.5)),
-                                    subtitle: const Text(
+                                    title: Text('Block YouTube Shorts',
+                                        style: TextStyle(
+                                            fontSize: 14.5, color: p.text)),
+                                    subtitle: Text(
                                       'क्लासेस और लेक्चर चलेंगे, Shorts टैब और रील्स ब्लॉक रहेंगे',
                                       style: TextStyle(
-                                          fontSize: 12, color: Colors.white60),
+                                          fontSize: 12, color: p.subtext),
                                     ),
                                     value: _blockYtShorts,
                                     onChanged: (_) => toggleFeature(
@@ -4364,15 +5820,15 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                       onChanged: (v) => _blockYtShorts = v,
                                     ),
                                   ),
-                                  const Divider(height: 1),
+                                  Divider(height: 1, color: p.border),
                                   SwitchListTile(
-                                    title: const Text(
-                                        'YouTube Search-Only Mode',
-                                        style: TextStyle(fontSize: 14.5)),
-                                    subtitle: const Text(
+                                    title: Text('YouTube Search-Only Mode',
+                                        style: TextStyle(
+                                            fontSize: 14.5, color: p.text)),
+                                    subtitle: Text(
                                       'YouTube होमपेज फीड छिपाएं ताकि केवल सर्च काम करे',
                                       style: TextStyle(
-                                          fontSize: 12, color: Colors.white60),
+                                          fontSize: 12, color: p.subtext),
                                     ),
                                     value: _hideYtFeed,
                                     onChanged: (_) => toggleFeature(
@@ -4380,15 +5836,16 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                       onChanged: (v) => _hideYtFeed = v,
                                     ),
                                   ),
-                                  const Divider(height: 1),
+                                  Divider(height: 1, color: p.border),
                                   SwitchListTile(
-                                    title: const Text(
+                                    title: Text(
                                         'Block Instagram Reels & Explore',
-                                        style: TextStyle(fontSize: 14.5)),
-                                    subtitle: const Text(
+                                        style: TextStyle(
+                                            fontSize: 14.5, color: p.text)),
+                                    subtitle: Text(
                                       'केवल DM/चैट चलेगा, Reels और Explore पेज बंद रहेंगे',
                                       style: TextStyle(
-                                          fontSize: 12, color: Colors.white60),
+                                          fontSize: 12, color: p.subtext),
                                     ),
                                     value: _blockIgReels,
                                     onChanged: (_) => toggleFeature(
@@ -4396,14 +5853,15 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                       onChanged: (v) => _blockIgReels = v,
                                     ),
                                   ),
-                                  const Divider(height: 1),
+                                  Divider(height: 1, color: p.border),
                                   SwitchListTile(
-                                    title: const Text('Strict Whitelist Mode',
-                                        style: TextStyle(fontSize: 14.5)),
+                                    title: Text('Strict Whitelist Mode',
+                                        style: TextStyle(
+                                            fontSize: 14.5, color: p.text)),
                                     subtitle: Text(
                                       'केवल नीचे दी गई ${_whitelistedDomains.length} स्टडी वेबसाइट्स ही खुलेंगी',
-                                      style: const TextStyle(
-                                          fontSize: 12, color: Colors.white60),
+                                      style: TextStyle(
+                                          fontSize: 12, color: p.subtext),
                                     ),
                                     value: _whitelistMode,
                                     onChanged: (_) => toggleFeature(
@@ -4418,10 +5876,9 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                             Container(
                               padding: const EdgeInsets.all(14),
                               decoration: BoxDecoration(
-                                color: const Color(0xFF1E232E),
+                                color: p.card,
                                 borderRadius: BorderRadius.circular(14),
-                                border: Border.all(
-                                    color: const Color(0xFF2E3646)),
+                                border: Border.all(color: p.border),
                               ),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -4430,11 +5887,12 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                     mainAxisAlignment:
                                         MainAxisAlignment.spaceBetween,
                                     children: [
-                                      const Text(
+                                      Text(
                                         'Allowed Study Domains (Whitelist)',
                                         style: TextStyle(
                                           fontSize: 14,
                                           fontWeight: FontWeight.w600,
+                                          color: p.text,
                                         ),
                                       ),
                                       TextButton.icon(
@@ -4453,12 +5911,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                     children: _whitelistedDomains.map((domain) {
                                       return Chip(
                                         label: Text(domain,
-                                            style:
-                                                const TextStyle(fontSize: 12)),
-                                        backgroundColor:
-                                            const Color(0xFF12151C),
-                                        side: const BorderSide(
-                                            color: Color(0xFF2E3646)),
+                                            style: TextStyle(
+                                                fontSize: 12, color: p.text)),
+                                        backgroundColor: p.bg,
+                                        side: BorderSide(color: p.border),
                                         deleteIcon:
                                             const Icon(Icons.close, size: 14),
                                         onDeleted: () async {
@@ -4489,11 +5945,12 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                const Text(
+                                Text(
                                   'Custom Block Groups',
                                   style: TextStyle(
                                     fontSize: 15,
                                     fontWeight: FontWeight.w600,
+                                    color: p.text,
                                   ),
                                 ),
                                 FilledButton.tonalIcon(
@@ -4512,13 +5969,12 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                 margin: const EdgeInsets.only(bottom: 12),
                                 padding: const EdgeInsets.all(14),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF1E232E),
+                                  color: p.card,
                                   borderRadius: BorderRadius.circular(14),
                                   border: Border.all(
                                     color: active
-                                        ? const Color(0xFFA8C7FA)
-                                            .withOpacity(0.45)
-                                        : const Color(0xFF2E3646),
+                                        ? p.accent.withAlpha(140)
+                                        : p.border,
                                   ),
                                 ),
                                 child: Column(
@@ -4536,15 +5992,16 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                                   : Icons.lock_open_outlined,
                                               size: 19,
                                               color: active
-                                                  ? const Color(0xFFA8C7FA)
-                                                  : Colors.white54,
+                                                  ? p.accent
+                                                  : p.subtext,
                                             ),
                                             const SizedBox(width: 8),
                                             Text(
                                               group.name,
-                                              style: const TextStyle(
+                                              style: TextStyle(
                                                 fontSize: 15.5,
                                                 fontWeight: FontWeight.w600,
+                                                color: p.text,
                                               ),
                                             ),
                                           ],
@@ -4616,10 +6073,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                                 ),
                                               ),
                                             IconButton(
-                                              icon: const Icon(
+                                              icon: Icon(
                                                   Icons.delete_outline,
                                                   size: 19,
-                                                  color: Colors.white54),
+                                                  color: p.subtext),
                                               onPressed: () async {
                                                 if (group.isCurrentlyActive) {
                                                   _showToast(
@@ -4644,12 +6101,11 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                         ...group.domains.map(
                                           (domain) => Chip(
                                             label: Text(domain,
-                                                style: const TextStyle(
-                                                    fontSize: 12)),
-                                            backgroundColor:
-                                                const Color(0xFF12151C),
-                                            side: const BorderSide(
-                                                color: Color(0xFF2E3646)),
+                                                style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: p.text)),
+                                            backgroundColor: p.bg,
+                                            side: BorderSide(color: p.border),
                                             deleteIcon: const Icon(Icons.close,
                                                 size: 14),
                                             onDeleted: () async {
@@ -4670,8 +6126,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                               const Icon(Icons.add, size: 15),
                                           label: const Text('Add Domain',
                                               style: TextStyle(fontSize: 12)),
-                                          backgroundColor:
-                                              const Color(0xFF263147),
+                                          backgroundColor: p.topIconBg,
                                           side: BorderSide.none,
                                           onPressed: () =>
                                               _promptAddDomainToGroup(
@@ -4698,13 +6153,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   Future<void> _promptAddWhitelistDomain(StateSetter setSheetState) async {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     final ctrl = TextEditingController();
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E232E),
-        title: const Text('स्टडी वेबसाइट जोड़ें',
-            style: TextStyle(fontSize: 17)),
+        backgroundColor: p.menuBg,
+        title: Text('स्टडी वेबसाइट जोड़ें',
+            style: TextStyle(fontSize: 17, color: p.text)),
         content: TextField(
           controller: ctrl,
           decoration: const InputDecoration(
@@ -4741,13 +6197,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   Future<void> _promptCreateNewGroup(StateSetter setSheetState) async {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     final nameCtrl = TextEditingController();
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E232E),
-        title:
-            const Text('नया Lock Group बनाएं', style: TextStyle(fontSize: 17)),
+        backgroundColor: p.menuBg,
+        title: Text('नया Lock Group बनाएं',
+            style: TextStyle(fontSize: 17, color: p.text)),
         content: TextField(
           controller: nameCtrl,
           decoration: const InputDecoration(
@@ -4788,13 +6245,14 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
 
   Future<void> _promptAddDomainToGroup(
       LockGroup group, StateSetter setSheetState) async {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
     final domainCtrl = TextEditingController();
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E232E),
+        backgroundColor: p.menuBg,
         title: Text('${group.name} में डोमेन जोड़ें',
-            style: const TextStyle(fontSize: 17)),
+            style: TextStyle(fontSize: 17, color: p.text)),
         content: TextField(
           controller: domainCtrl,
           decoration: const InputDecoration(
@@ -4832,10 +6290,12 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   }
 
   // ===========================================================================
-  // MAIN SCAFFOLD (TOP BAR + WEBVIEW + AUTO-HIDING BOTTOM ZOOM OVERLAY)
+  // MAIN SCAFFOLD (CHROME LIGHT/DARK TOP BAR + WEBVIEW + FLOATING ZOOM)
   // ===========================================================================
   @override
   Widget build(BuildContext context) {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
+
     return WillPopScope(
       onWillPop: () async {
         if (_showFindBar || _showZoomBar) {
@@ -4861,6 +6321,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         return true;
       },
       child: Scaffold(
+        backgroundColor: p.bg,
         body: SafeArea(
           child: Column(
             children: [
@@ -4869,17 +6330,15 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
                 decoration: BoxDecoration(
-                  color: _isIncognito
-                      ? const Color(0xFF1F1A2C)
-                      : const Color(0xFF1A1F29),
-                  border: const Border(
-                    bottom: BorderSide(color: Color(0xFF282F3D), width: 1),
+                  color: p.bg,
+                  border: Border(
+                    bottom: BorderSide(color: p.border, width: 0.8),
                   ),
                 ),
                 child: Row(
                   children: [
                     IconButton(
-                      icon: const Icon(Icons.home_outlined, size: 22),
+                      icon: Icon(Icons.home_outlined, size: 22, color: p.text),
                       tooltip: 'Home',
                       onPressed: () => _loadFromSearchBar(_homepageUrl),
                     ),
@@ -4887,28 +6346,27 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                       child: Container(
                         height: 40,
                         decoration: BoxDecoration(
-                          color: const Color(0xFF12151C),
+                          color: p.addressBar,
                           borderRadius: BorderRadius.circular(22),
-                          border: Border.all(color: const Color(0xFF2D3444)),
                         ),
                         child: TextField(
                           controller: _urlController,
                           textInputAction: TextInputAction.go,
                           onSubmitted: _loadFromSearchBar,
-                          style: const TextStyle(fontSize: 13.5),
+                          style: TextStyle(fontSize: 14, color: p.text),
                           decoration: InputDecoration(
                             hintText: 'Search or type URL',
+                            hintStyle: TextStyle(color: p.subtext),
                             prefixIcon: Icon(
                               _isIncognito
                                   ? Icons.visibility_off_outlined
                                   : Icons.lock_outline,
                               size: 16,
-                              color: _isIncognito
-                                  ? const Color(0xFFC4B5FD)
-                                  : const Color(0xFFA8C7FA),
+                              color: p.accent,
                             ),
                             suffixIcon: IconButton(
-                              icon: const Icon(Icons.clear, size: 16),
+                              icon:
+                                  Icon(Icons.clear, size: 16, color: p.subtext),
                               onPressed: () => _urlController.clear(),
                             ),
                             border: InputBorder.none,
@@ -4919,7 +6377,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                       ),
                     ),
                     const SizedBox(width: 4),
-                    // Tab Counter Box [ 1 ] -> Opens Chrome Grid Tab Switcher
+                    // Tab Counter Box [ 1 ]
                     InkWell(
                       onTap: _openFullScreenTabSwitcher,
                       borderRadius: BorderRadius.circular(8),
@@ -4929,27 +6387,27 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         margin: const EdgeInsets.symmetric(horizontal: 6),
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
-                          border: Border.all(
-                              color: const Color(0xFFE2E8F0), width: 1.6),
+                          border: Border.all(color: p.text, width: 1.6),
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
                           '${_tabs.length}',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 11.5,
                             fontWeight: FontWeight.bold,
+                            color: p.text,
                           ),
                         ),
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.shield_outlined,
-                          size: 21, color: Color(0xFFA8C7FA)),
+                      icon: Icon(Icons.shield_outlined,
+                          size: 21, color: p.accent),
                       tooltip: 'Focus & Lock Manager',
                       onPressed: _openLockManagerSheet,
                     ),
                     IconButton(
-                      icon: const Icon(Icons.more_vert, size: 22),
+                      icon: Icon(Icons.more_vert, size: 22, color: p.text),
                       tooltip: 'More options',
                       onPressed: _openChromeStyleMenu,
                     ),
@@ -4962,11 +6420,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  color: const Color(0xFF1E232E),
+                  color: p.surface,
                   child: Row(
                     children: [
-                      const Icon(Icons.search,
-                          size: 18, color: Color(0xFFA8C7FA)),
+                      Icon(Icons.search, size: 18, color: p.accent),
                       const SizedBox(width: 8),
                       Expanded(
                         child: TextField(
@@ -4974,9 +6431,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                           autofocus: true,
                           textInputAction: TextInputAction.search,
                           onSubmitted: _performFindInPage,
-                          style: const TextStyle(fontSize: 14),
-                          decoration: const InputDecoration(
+                          style: TextStyle(fontSize: 14, color: p.text),
+                          decoration: InputDecoration(
                             hintText: 'Find in page...',
+                            hintStyle: TextStyle(color: p.subtext),
                             border: InputBorder.none,
                             isDense: true,
                           ),
@@ -4988,7 +6446,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         child: const Text('Find Next'),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.close, size: 18),
+                        icon: Icon(Icons.close, size: 18, color: p.text),
                         onPressed: () => setState(() => _showFindBar = false),
                       ),
                     ],
@@ -4999,17 +6457,16 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                 LinearProgressIndicator(
                   value: _loadingProgress / 100.0,
                   minHeight: 2,
-                  color: const Color(0xFFA8C7FA),
+                  color: p.accent,
                   backgroundColor: Colors.transparent,
                 ),
 
-              // MAIN WEBVIEW + FLOATING CHROME ZOOM BAR + BLOCKED OVERLAY
+              // MAIN WEBVIEW + AUTO-HIDING FLOATING CHROME ZOOM + BLOCKED OVERLAY
               Expanded(
                 child: Stack(
                   children: [
                     WebViewWidget(controller: _webController),
 
-                    // CHROME-STYLE BOTTOM FLOATING ZOOM CONTROL (Auto-Hides after 4s)
                     if (_showZoomBar)
                       Positioned(
                         left: 16,
@@ -5018,14 +6475,12 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            // Top Pill: [ 100% | Reset ]
                             Material(
-                              color: const Color(0xFF1E232E),
+                              color: p.menuBg,
                               elevation: 8,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(16),
-                                side: const BorderSide(
-                                    color: Color(0xFF2E3646)),
+                                side: BorderSide(color: p.border),
                               ),
                               child: Padding(
                                 padding: const EdgeInsets.symmetric(
@@ -5035,9 +6490,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                   children: [
                                     Text(
                                       '$_zoomPercent %',
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                           fontWeight: FontWeight.w600,
-                                          fontSize: 14),
+                                          fontSize: 14,
+                                          color: p.text),
                                     ),
                                     const SizedBox(width: 10),
                                     TextButton(
@@ -5053,14 +6509,12 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                               ),
                             ),
                             const SizedBox(height: 8),
-                            // Bottom Slider Bar: [ - ] ====●==== [ + ]
                             Material(
-                              color: const Color(0xFF1E232E),
+                              color: p.menuBg,
                               elevation: 10,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(28),
-                                side: const BorderSide(
-                                    color: Color(0xFF2E3646)),
+                                side: BorderSide(color: p.border),
                               ),
                               child: Padding(
                                 padding: const EdgeInsets.symmetric(
@@ -5068,7 +6522,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                 child: Row(
                                   children: [
                                     IconButton(
-                                      icon: const Icon(Icons.remove),
+                                      icon: Icon(Icons.remove, color: p.text),
                                       onPressed: () {
                                         setState(() {
                                           _zoomPercent =
@@ -5084,7 +6538,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                         min: 50,
                                         max: 200,
                                         divisions: 15,
-                                        activeColor: const Color(0xFF3B82F6),
+                                        activeColor: p.accent,
                                         onChanged: (v) {
                                           setState(
                                               () => _zoomPercent = v.round());
@@ -5094,7 +6548,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                                       ),
                                     ),
                                     IconButton(
-                                      icon: const Icon(Icons.add),
+                                      icon: Icon(Icons.add, color: p.text),
                                       onPressed: () {
                                         setState(() {
                                           _zoomPercent =
@@ -5112,7 +6566,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         ),
                       ),
 
-                    if (_isPageBlocked) _buildBlockedOverlay(),
+                    if (_isPageBlocked) _buildBlockedOverlay(p),
                   ],
                 ),
               ),
@@ -5123,10 +6577,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     );
   }
 
-  Widget _buildBlockedOverlay() {
+  Widget _buildBlockedOverlay(ChromePalette p) {
     return Container(
       width: double.infinity,
-      color: const Color(0xFF12151C),
+      color: p.bg,
       padding: const EdgeInsets.all(28),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -5134,25 +6588,26 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           Container(
             padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
-              color: const Color(0xFF1E232E),
+              color: p.surface,
               shape: BoxShape.circle,
-              border: Border.all(color: const Color(0xFF2E3646)),
+              border: Border.all(color: p.border),
             ),
-            child: const Icon(
+            child: Icon(
               Icons.shield_outlined,
               size: 46,
-              color: Color(0xFFA8C7FA),
+              color: p.accent,
             ),
           ),
           const SizedBox(height: 20),
-          const Text(
+          Text(
             'Access Restricted',
-            style: TextStyle(fontSize: 21, fontWeight: FontWeight.w600),
+            style: TextStyle(
+                fontSize: 21, fontWeight: FontWeight.w600, color: p.text),
           ),
           const SizedBox(height: 8),
           Text(
             _blockedReason,
-            style: const TextStyle(fontSize: 14.5, color: Color(0xFFA8C7FA)),
+            style: TextStyle(fontSize: 14.5, color: p.accent),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 8),
@@ -5160,7 +6615,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             _blockedUrl,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 12, color: Colors.white54),
+            style: TextStyle(fontSize: 12, color: p.subtext),
           ),
           const SizedBox(height: 28),
           FilledButton.icon(
