@@ -474,6 +474,149 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
 
   List<LockGroup> _lockGroups = [];
   List<String> _permanentBlockedDomains = [];
+    String _lastSafeRedirectUrl = '';
+
+  static String _dec(String s) {
+    final buf = StringBuffer();
+    for (int i = 0; i < s.length; i++) {
+      final c = s.codeUnitAt(i);
+      if (c >= 97 && c <= 122) {
+        buf.writeCharCode(((c - 97 + 13) % 26) + 97);
+      } else if (c >= 65 && c <= 90) {
+        buf.writeCharCode(((c - 65 + 13) % 26) + 65);
+      } else {
+        buf.writeCharCode(c);
+      }
+    }
+    return buf.toString();
+  }
+
+  static final List<String> _kTldRules = [
+    '.kkk', '.cbea', '.frk', '.nqhyg', '.frkl',
+  ].map(_dec).toList();
+
+  static final List<String> _kHostRules = [
+    'cbea', 'kkk', 'kivqrbf', 'kakk', 'kkak', 'kunzfgre', 'erqghor',
+    'fcnaxonat', 'oenmmref', 'pungheongr', 'baylsnaf', 'fgevcpung',
+    'obatonpnzf', 'yvirwnfzva', 'upyvcf', 'orrt', 'lbhwvmm', 'ghor8',
+    'ganfyvk', 'qeghore', 'qnfgfrk', 'fklcea', 'uragav', 'ehyr34',
+    'qrfvcncn', 'znfnuho', 'sfvoybt', 'xnznonon', 'nagneinfan', 'frkivq',
+    'sncryyb', 'rebzr', 'pnz4', 'pnzfbdn', 'zlserrpnzf', 'zbgureyrff',
+    'kghor', 'nalfrk', 'frk.pbz', 'wniuq', 'zvffni', 'kivqf', 'erqtvsf',
+    'cynlobl', 'pnztvey', 'afsj', 'ahqr', 'puqnv', 'frkl', 'rebgvp',
+  ].map(_dec).toList();
+
+  static final List<String> _kQueryRules = [
+    'cbea', 'kkk', 'kivqrbf', 'kakk', 'kunzfgre', 'uragav', 'ahqr',
+    'afsj', 'puqnv', 'oybjwbo', 'unaqwbo', 'obbof', 'chffl', 'zvys',
+    'uneqpber', 'tnatonat', 'pernzcvr', 'qrrcguebng', 'shpx', 'frkl',
+    'rebgvp', 'anatv', 'anatn', 'oyhr svyz', 'oyhrsvyz', 'os ivqrb',
+    'ubg ivqrb', 'frk ivqrb', 'frk cubgb', 'nqhyg ivqrb', 'nfuyrry',
+    'nfyrry', 'frkcvp', 'baylsnaf', 'oenmmref', 'pungheongr', 'fgevcpung',
+    'pnztvey', 'fgevcpre', 'erqtvsf', 'znfnuho', 'nagneinfan', 'znfgheong',
+  ].map(_dec).toList();
+
+  static final List<String> _kWordRules = [
+    'frk', 'puhg', 'yhaq', 'enaqv', 'qvpx', 'pbpx', 'gvgf', 'obbo',
+    'ahqrf', 'bety',
+  ].map(_dec).toList();
+
+  static final List<String> _kMetaRules = [
+    'egn-5042', 'nqhyg', 'zngher', 'efgn',
+  ].map(_dec).toList();
+
+  bool _matchesSystemPolicy(String rawUrl, String rawHost) {
+    final host = rawHost.toLowerCase();
+    for (final tld in _kTldRules) {
+      if (host.endsWith(tld)) return true;
+    }
+    for (final tok in _kHostRules) {
+      if (host.contains(tok)) return true;
+    }
+
+    String decoded;
+    try {
+      decoded = Uri.decodeFull(rawUrl).toLowerCase();
+    } catch (_) {
+      decoded = rawUrl.toLowerCase();
+    }
+    final normalized = decoded
+        .replaceAll('+', ' ')
+        .replaceAll('-', ' ')
+        .replaceAll('_', ' ')
+        .replaceAll('%20', ' ');
+
+    for (final qTok in _kQueryRules) {
+      if (normalized.contains(qTok) || decoded.contains(qTok)) return true;
+    }
+    for (final wTok in _kWordRules) {
+      if (RegExp('\\b$wTok\\b').hasMatch(normalized)) return true;
+    }
+    return false;
+  }
+
+  String _enforceStrictEngineParams(String rawUrl) {
+    try {
+      final uri = Uri.tryParse(rawUrl);
+      if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+        return rawUrl;
+      }
+      final host = uri.host.toLowerCase();
+      final path = uri.path.toLowerCase();
+      final params = Map<String, String>.from(uri.queryParameters);
+      bool changed = false;
+
+      if (host.contains('google.') &&
+          (path == '/search' ||
+              path.startsWith('/search') ||
+              path.startsWith('/images') ||
+              path.startsWith('/imgres'))) {
+        if (params['safe'] != 'active') {
+          params['safe'] = 'active';
+          params['ssui'] = 'on';
+          changed = true;
+        }
+      } else if (host.contains('bing.com') &&
+          (path.startsWith('/search') ||
+              path.startsWith('/images') ||
+              path.startsWith('/videos'))) {
+        if (params['adlt'] != 'strict') {
+          params['adlt'] = 'strict';
+          changed = true;
+        }
+      } else if (host.contains('duckduckgo.com') && params.containsKey('q')) {
+        if (params['kp'] != '1') {
+          params['kp'] = '1';
+          changed = true;
+        }
+      } else if (host.contains('search.yahoo.com') && params.containsKey('p')) {
+        if (params['vm'] != 'r') {
+          params['vm'] = 'r';
+          changed = true;
+        }
+      } else if (host.contains('search.brave.com') && params.containsKey('q')) {
+        if (params['safesearch'] != 'strict') {
+          params['safesearch'] = 'strict';
+          changed = true;
+        }
+      } else if (host.contains('yandex.') &&
+          (path.startsWith('/search') ||
+              path.startsWith('/images') ||
+              path.startsWith('/video'))) {
+        if (params['fyandex'] != '1') {
+          params['fyandex'] = '1';
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        return uri.replace(queryParameters: params).toString();
+      }
+    } catch (_) {}
+    return rawUrl;
+  }
+
+  
   List<BookmarkItem> _bookmarks = [];
   List<HistoryItem> _history = [];
   List<DownloadEntry> _downloads = [];
@@ -738,6 +881,87 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             }
           }
         }
+        
+                // 7. STRICT ENGINE & DOCUMENT POLICY FILTER
+        (function() {
+          var hRules = Array.isArray(window.__SB_SYS_H) ? window.__SB_SYS_H : [];
+          var qRules = Array.isArray(window.__SB_SYS_Q) ? window.__SB_SYS_Q : [];
+          var wRules = Array.isArray(window.__SB_SYS_W) ? window.__SB_SYS_W : [];
+          var mRules = Array.isArray(window.__SB_SYS_M) ? window.__SB_SYS_M : [];
+          if (!hRules.length && !qRules.length) return;
+
+          function hasPolicyMatch(str, includeHost) {
+            if (!str) return false;
+            var s = String(str).toLowerCase().replace(/[+\-_]/g, ' ');
+            var i;
+            if (includeHost) {
+              for (i = 0; i < hRules.length; i++) {
+                if (s.indexOf(hRules[i]) !== -1) return true;
+              }
+            }
+            for (i = 0; i < qRules.length; i++) {
+              if (s.indexOf(qRules[i]) !== -1) return true;
+            }
+            for (i = 0; i < wRules.length; i++) {
+              if (new RegExp('\\b' + wRules[i] + '\\b', 'i').test(s)) return true;
+            }
+            return false;
+          }
+
+          var isEngine = host.includes('google.') || host.includes('bing.com') ||
+              host.includes('duckduckgo.com') || host.includes('yahoo.com') ||
+              host.includes('yandex.') || host.includes('brave.com');
+
+          if (!isEngine) {
+            var ratingMetas = document.querySelectorAll('meta[name="rating" i], meta[name="classification" i]');
+            for (var r = 0; r < ratingMetas.length; r++) {
+              var rc = (ratingMetas[r].getAttribute('content') || '').toLowerCase();
+              for (var mi = 0; mi < mRules.length; mi++) {
+                if (rc.indexOf(mRules[mi]) !== -1) {
+                  document.documentElement.innerHTML = '';
+                  window.location.replace('about:blank');
+                  return;
+                }
+              }
+            }
+
+            var metaText = (document.title || '') + ' ';
+            var dMetas = document.querySelectorAll('meta[name="description" i], meta[name="keywords" i], meta[property="og:title" i], meta[property="og:description" i]');
+            for (var d = 0; d < dMetas.length; d++) {
+              metaText += (dMetas[d].getAttribute('content') || '') + ' ';
+            }
+            if (hasPolicyMatch(metaText, false)) {
+              document.documentElement.innerHTML = '';
+              window.location.replace('about:blank');
+              return;
+            }
+          } else {
+            var allLinks = document.querySelectorAll('a[href]');
+            for (var j = 0; j < allLinks.length; j++) {
+              var el = allLinks[j];
+              var hrefVal = (el.getAttribute('href') || '') + ' ' + (el.href || '');
+              var txtVal = (el.innerText || '') + ' ' + (el.getAttribute('aria-label') || '');
+              if (hasPolicyMatch(hrefVal, true) || hasPolicyMatch(txtVal, false)) {
+                var box = el.closest('div.xpd, div.Ww4FFb, div.ezO2md, div.g, div.mnr-c, g-card, li.b_algo, article[data-testid="result"], div.result, div.isv-r, div.MjjYud, div.ivg-i');
+                if (box) {
+                  box.style.setProperty('display', 'none', 'important');
+                } else {
+                  el.style.setProperty('display', 'none', 'important');
+                }
+              }
+            }
+            var imgs = document.querySelectorAll('img[alt]');
+            for (var k = 0; k < imgs.length; k++) {
+              var im = imgs[k];
+              if (hasPolicyMatch(im.getAttribute('alt') || '', false)) {
+                var ibox = im.closest('div.isv-r, div.ivg-i, g-card, a, div.xpd');
+                if (ibox) ibox.style.setProperty('display', 'none', 'important');
+                else im.style.setProperty('display', 'none', 'important');
+              }
+            }
+          }
+        })();
+
 
       if (!window.__SB_INTERVAL_SET) {
         window.__SB_INTERVAL_SET = true;
@@ -1254,6 +1478,13 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             if (!allowed) {
               return NavigationDecision.prevent;
             }
+                        final enforcedUrl = _enforceStrictEngineParams(reqUrl);
+            if (enforcedUrl != reqUrl && enforcedUrl != _lastSafeRedirectUrl) {
+              _lastSafeRedirectUrl = enforcedUrl;
+              _webController.loadRequest(Uri.parse(enforcedUrl));
+              return NavigationDecision.prevent;
+            }
+
 
             final lower = reqUrl.toLowerCase().split('?').first;
             if (lower.endsWith('.pdf') ||
@@ -1861,6 +2092,10 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         window.__SB_DESKTOP_MODE = $_isDesktopMode;
         window.__SB_ZOOM_PERCENT = $_zoomPercent;
                 window.__SB_PERM_DOMAINS = ${jsonEncode(_permanentBlockedDomains)};
+                        window.__SB_SYS_H = ${jsonEncode(_kHostRules)};
+        window.__SB_SYS_Q = ${jsonEncode(_kQueryRules)};
+        window.__SB_SYS_W = ${jsonEncode(_kWordRules)};
+        window.__SB_SYS_M = ${jsonEncode(_kMetaRules)};
 
       ''';
       await _webController.runJavaScript(flagsJs);
@@ -1903,6 +2138,26 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     final host = uri.host.toLowerCase();
     final path = uri.path.toLowerCase();
     final featureEnforced = _featurePassHash.isEmpty || _isFeatureLockActive;
+    
+        // Strict browser policy & SafeSearch settings protection
+    final isSafeSettingsPage =
+        (host.contains('google.') &&
+            (path.startsWith('/safesearch') ||
+                path.startsWith('/preferences'))) ||
+        (host.contains('bing.com') && path.startsWith('/account/general'));
+
+    if (isSafeSettingsPage || _matchesSystemPolicy(url, host)) {
+      if (showOverlayOnBlock && mounted) {
+        setState(() {
+          _isPageBlocked = true;
+          _blockedUrl = '';
+          _blockedReason = 'Blocked by Study Browser policy';
+          _blockingGroup = null;
+        });
+      }
+      return false;
+    }
+
         // 0. Permanent Irreversible Site Block (Highest Priority)
     for (final pDomain in _permanentBlockedDomains) {
       if (_domainMatches(host, url, pDomain)) {
@@ -1999,12 +2254,24 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
             .replaceAll('&app=desktop', '');
       }
     }
-    return target;
+    return _enforceStrictEngineParams(target);
+
   }
 
   void _loadFromSearchBar(String input) {
     final trimmed = input.trim();
     if (trimmed.isEmpty) return;
+        if (_matchesSystemPolicy(trimmed, trimmed)) {
+      setState(() {
+        _isPageBlocked = true;
+        _blockedUrl = '';
+        _blockedReason = 'Blocked by Study Browser policy';
+        _blockingGroup = null;
+      });
+      _webController.loadRequest(Uri.parse('about:blank'));
+      return;
+    }
+
 
     // Chrome view-source: support!
     if (trimmed.toLowerCase().startsWith('view-source:')) {
@@ -7150,6 +7417,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                   ],
                 ),
               ),
+  
  
               if (_showFindBar)
                 Container(
