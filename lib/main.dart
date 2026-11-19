@@ -473,6 +473,7 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
   ];
 
   List<LockGroup> _lockGroups = [];
+  List<String> _permanentBlockedDomains = [];
   List<BookmarkItem> _bookmarks = [];
   List<HistoryItem> _history = [];
   List<DownloadEntry> _downloads = [];
@@ -678,6 +679,65 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
           lpTimer = null;
         }, { passive: true });
       }
+      
+      
+              // 6. PERMANENT BLOCKED SITES - HIDE FROM SEARCH RESULTS
+        if (Array.isArray(window.__SB_PERM_DOMAINS) && window.__SB_PERM_DOMAINS.length > 0) {
+          function matchesPermDomain(urlStr) {
+            if (!urlStr) return false;
+            try {
+              var candidate = urlStr;
+              if (candidate.indexOf('/url?') !== -1) {
+                var qMatch = candidate.match(/[?&](?:q|url)=([^&]+)/i);
+                if (qMatch && qMatch[1]) {
+                  candidate = decodeURIComponent(qMatch[1]);
+                }
+              }
+              var u = new URL(candidate, window.location.origin);
+              var h = (u.hostname || '').toLowerCase().replace(/^www\./, '').replace(/^m\./, '');
+              for (var i = 0; i < window.__SB_PERM_DOMAINS.length; i++) {
+                var rule = window.__SB_PERM_DOMAINS[i];
+                if (rule && (h === rule || h.endsWith('.' + rule))) {
+                  return true;
+                }
+              }
+            } catch (e) {}
+            return false;
+          }
+
+          if (matchesPermDomain(window.location.href)) {
+            window.location.replace('about:blank');
+            return;
+          }
+
+          var isSearchEngine = host.includes('google.') || host.includes('bing.com') || host.includes('duckduckgo.com') || host.includes('yahoo.com') || host.includes('yandex.');
+          if (isSearchEngine) {
+            var links = document.querySelectorAll('a[href]');
+            for (var j = 0; j < links.length; j++) {
+              var a = links[j];
+              if (matchesPermDomain(a.getAttribute('href')) || matchesPermDomain(a.href)) {
+                var card = a.closest('div.xpd, div.Ww4FFb, div.ezO2md, div.g, div.mnr-c, g-card, li.b_algo, article[data-testid="result"], div.result, div.isv-r, div.MjjYud');
+                if (card) {
+                  card.style.setProperty('display', 'none', 'important');
+                } else {
+                  a.style.setProperty('display', 'none', 'important');
+                }
+              }
+            }
+            var cites = document.querySelectorAll('cite');
+            for (var k = 0; k < cites.length; k++) {
+              var cText = (cites[k].innerText || '').toLowerCase();
+              for (var m = 0; m < window.__SB_PERM_DOMAINS.length; m++) {
+                var r = window.__SB_PERM_DOMAINS[m];
+                if (r && cText.includes(r)) {
+                  var cCard = cites[k].closest('div.xpd, div.Ww4FFb, div.ezO2md, div.g, div.mnr-c, g-card, li.b_algo, article[data-testid="result"], div.result, div.MjjYud');
+                  if (cCard) cCard.style.setProperty('display', 'none', 'important');
+                  break;
+                }
+              }
+            }
+          }
+        }
 
       if (!window.__SB_INTERVAL_SET) {
         window.__SB_INTERVAL_SET = true;
@@ -940,6 +1000,11 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       if (savedWhitelist != null && savedWhitelist.isNotEmpty) {
         _whitelistedDomains = savedWhitelist;
       }
+            final savedPerm = prefs.getStringList('permanentBlockedDomainsV1');
+      if (savedPerm != null) {
+        _permanentBlockedDomains = savedPerm;
+      }
+
 
       final savedSearches = prefs.getStringList('recentSearches');
       if (savedSearches != null) {
@@ -1071,6 +1136,8 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     await prefs.setString('homepageUrl', _homepageUrl);
     await prefs.setString('searchEngineUrl', _searchEngineUrl);
     await prefs.setStringList('whitelistedDomains', _whitelistedDomains);
+        await prefs.setStringList(
+        'permanentBlockedDomainsV1', _permanentBlockedDomains);
     await prefs.setStringList('recentSearches', _recentSearches);
     await prefs.setString(
       'savedBrowserTabs',
@@ -1793,6 +1860,8 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         window.__SB_IG_REELS = $igActive;
         window.__SB_DESKTOP_MODE = $_isDesktopMode;
         window.__SB_ZOOM_PERCENT = $_zoomPercent;
+                window.__SB_PERM_DOMAINS = ${jsonEncode(_permanentBlockedDomains)};
+
       ''';
       await _webController.runJavaScript(flagsJs);
       await _webController.runJavaScript(_focusFilterJs);
@@ -1834,6 +1903,21 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
     final host = uri.host.toLowerCase();
     final path = uri.path.toLowerCase();
     final featureEnforced = _featurePassHash.isEmpty || _isFeatureLockActive;
+        // 0. Permanent Irreversible Site Block (Highest Priority)
+    for (final pDomain in _permanentBlockedDomains) {
+      if (_domainMatches(host, url, pDomain)) {
+        if (showOverlayOnBlock && mounted) {
+          setState(() {
+            _isPageBlocked = true;
+            _blockedUrl = '';
+            _blockedReason = 'यह साइट हमेशा के लिए ब्लॉक है';
+            _blockingGroup = null;
+          });
+        }
+        return false;
+      }
+    }
+
 
     if (featureEnforced) {
       if (_blockYtShorts &&
@@ -2266,6 +2350,610 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
       ),
     );
   }
+  
+  bool _isUrlPermanentlyBlocked(String input) {
+    final lower = input.toLowerCase().trim();
+    if (lower.isEmpty) return false;
+    final uri = Uri.tryParse(lower);
+    final host = (uri?.host.isNotEmpty == true) ? uri!.host : lower;
+    for (final pDomain in _permanentBlockedDomains) {
+      if (_domainMatches(host, lower, pDomain)) return true;
+    }
+    return false;
+  }
+
+  String _formatDisplayUrl(String url) {
+    if (url.isEmpty || url == 'about:blank') return 'Search or type URL';
+    return url
+        .replaceFirst(RegExp(r'^https?://'), '')
+        .replaceFirst(RegExp(r'^www\.'), '');
+  }
+
+  // ===========================================================================
+  // CHROME-STYLE FULL-SCREEN ADDRESS BAR / OMNIBOX OVERLAY
+  // ===========================================================================
+  Future<void> _openChromeAddressBarOverlay() async {
+    String copiedUrl = '';
+    try {
+      final clipData = await Clipboard.getData(Clipboard.kTextPlain);
+      final rawClip = (clipData?.text ?? '').trim();
+      if ((rawClip.startsWith('http://') || rawClip.startsWith('https://')) &&
+          !_isUrlPermanentlyBlocked(rawClip)) {
+        copiedUrl = rawClip;
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    final searchCtrl = TextEditingController();
+    bool showCopiedUrlPreview = false;
+
+    await Navigator.of(context)
+        .push(
+          PageRouteBuilder(
+            transitionDuration: const Duration(milliseconds: 120),
+            reverseTransitionDuration: const Duration(milliseconds: 100),
+            pageBuilder: (overlayCtx, anim, _) => StatefulBuilder(
+              builder: (overlayCtx, setOverlayState) {
+                final p = ChromePalette.of(overlayCtx, incognito: _isIncognito);
+                final q = searchCtrl.text.trim();
+                final qLower = q.toLowerCase();
+
+                final safeBookmarks = _bookmarks
+                    .where((b) => !_isUrlPermanentlyBlocked(b.url))
+                    .toList();
+
+                final safeRecentSearches = _recentSearches
+                    .where((s) => !_isUrlPermanentlyBlocked(s))
+                    .toList();
+
+                final matchingRecent = q.isEmpty
+                    ? safeRecentSearches
+                    : safeRecentSearches
+                        .where((s) => s.toLowerCase().contains(qLower))
+                        .toList();
+
+                final matchingHistory = q.isEmpty
+                    ? <HistoryItem>[]
+                    : _history
+                        .where((h) =>
+                            !_isUrlPermanentlyBlocked(h.url) &&
+                            (h.title.toLowerCase().contains(qLower) ||
+                                h.url.toLowerCase().contains(qLower)))
+                        .take(8)
+                        .toList();
+
+                final showCurrentPageRow = _currentUrl.isNotEmpty &&
+                    _currentUrl != 'about:blank' &&
+                    !_isUrlPermanentlyBlocked(_currentUrl) &&
+                    (q.isEmpty || q == _currentUrl);
+
+                return Scaffold(
+                  backgroundColor: p.bg,
+                  body: SafeArea(
+                    child: Column(
+                      children: [
+                        // TOP CHROME SEARCH INPUT BAR
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                          child: Container(
+                            height: 46,
+                            decoration: BoxDecoration(
+                              color: p.addressBar,
+                              borderRadius: BorderRadius.circular(24),
+                            ),
+                            child: Row(
+                              children: [
+                                const SizedBox(width: 14),
+                                CircleAvatar(
+                                  radius: 12,
+                                  backgroundColor: p.bg,
+                                  child: Text(
+                                    'G',
+                                    style: TextStyle(
+                                      color: p.accent,
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: TextField(
+                                    controller: searchCtrl,
+                                    autofocus: true,
+                                    textInputAction: TextInputAction.search,
+                                    style:
+                                        TextStyle(fontSize: 15, color: p.text),
+                                    onChanged: (_) => setOverlayState(() {}),
+                                    onSubmitted: (val) {
+                                      final input = val.trim();
+                                      if (input.isEmpty) return;
+                                      Navigator.pop(overlayCtx);
+                                      _loadFromSearchBar(input);
+                                    },
+                                    decoration: InputDecoration(
+                                      hintText: 'Search Google or type URL',
+                                      hintStyle: TextStyle(
+                                          color: p.subtext, fontSize: 15),
+                                      border: InputBorder.none,
+                                    ),
+                                  ),
+                                ),
+                                if (q.isNotEmpty)
+                                  IconButton(
+                                    icon: Icon(Icons.close,
+                                        size: 20, color: p.subtext),
+                                    onPressed: () {
+                                      searchCtrl.clear();
+                                      setOverlayState(() {});
+                                    },
+                                  )
+                                else
+                                  IconButton(
+                                    icon: Icon(Icons.close,
+                                        size: 20, color: p.subtext),
+                                    tooltip: 'Close',
+                                    onPressed: () => Navigator.pop(overlayCtx),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        Expanded(
+                          child: ListView(
+                            padding: const EdgeInsets.only(bottom: 24),
+                            children: [
+                              // 1. CURRENT PAGE ROW (SHARE, COPY, EDIT)
+                              if (showCurrentPageRow)
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 14, vertical: 6),
+                                  child: Row(
+                                    children: [
+                                      CircleAvatar(
+                                        radius: 18,
+                                        backgroundColor: p.surfaceVariant,
+                                        child: Icon(Icons.public,
+                                            size: 19, color: p.subtext),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: InkWell(
+                                          onTap: () =>
+                                              Navigator.pop(overlayCtx),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                _pageTitle.isNotEmpty
+                                                    ? _pageTitle
+                                                    : _formatDisplayUrl(
+                                                        _currentUrl),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  fontSize: 14.5,
+                                                  fontWeight: FontWeight.w500,
+                                                  color: p.text,
+                                                ),
+                                              ),
+                                              Text(
+                                                _currentUrl,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  fontSize: 12.5,
+                                                  color: p.accent,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                      IconButton(
+                                        icon: Icon(Icons.share_outlined,
+                                            size: 20, color: p.text),
+                                        tooltip: 'Share',
+                                        onPressed: () {
+                                          Navigator.pop(overlayCtx);
+                                          _openChromeShareSheet();
+                                        },
+                                      ),
+                                      IconButton(
+                                        icon: Icon(Icons.copy_outlined,
+                                            size: 20, color: p.text),
+                                        tooltip: 'Copy link',
+                                        onPressed: () {
+                                          Clipboard.setData(
+                                              ClipboardData(text: _currentUrl));
+                                          setOverlayState(
+                                              () => copiedUrl = _currentUrl);
+                                          _showToast('Link copied');
+                                        },
+                                      ),
+                                      IconButton(
+                                        icon: Icon(Icons.edit_outlined,
+                                            size: 20, color: p.text),
+                                        tooltip: 'Edit URL',
+                                        onPressed: () {
+                                          searchCtrl.text = _currentUrl;
+                                          searchCtrl.selection =
+                                              TextSelection.fromPosition(
+                                            TextPosition(
+                                                offset: searchCtrl.text.length),
+                                          );
+                                          setOverlayState(() {});
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                ),
+
+                              // 2. LINK THAT YOU COPIED ROW
+                              if (q.isEmpty && copiedUrl.isNotEmpty)
+                                ListTile(
+                                  contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 14),
+                                  leading: CircleAvatar(
+                                    radius: 18,
+                                    backgroundColor: p.surfaceVariant,
+                                    child: Icon(Icons.public,
+                                        size: 19, color: p.subtext),
+                                  ),
+                                  title: Text(
+                                    'Link that you copied',
+                                    style:
+                                        TextStyle(fontSize: 14.5, color: p.text),
+                                  ),
+                                  subtitle: showCopiedUrlPreview
+                                      ? Text(
+                                          copiedUrl,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                              fontSize: 12, color: p.accent),
+                                        )
+                                      : null,
+                                  trailing: IconButton(
+                                    icon: Icon(
+                                      showCopiedUrlPreview
+                                          ? Icons.visibility_off_outlined
+                                          : Icons.visibility_outlined,
+                                      size: 20,
+                                      color: p.subtext,
+                                    ),
+                                    onPressed: () => setOverlayState(() =>
+                                        showCopiedUrlPreview =
+                                            !showCopiedUrlPreview),
+                                  ),
+                                  onTap: () {
+                                    Navigator.pop(overlayCtx);
+                                    _loadFromSearchBar(copiedUrl);
+                                  },
+                                ),
+
+                              // 3. TOP SITES / BOOKMARKS HORIZONTAL ROW
+                              if (q.isEmpty && safeBookmarks.isNotEmpty)
+                                SizedBox(
+                                  height: 92,
+                                  child: ListView.builder(
+                                    scrollDirection: Axis.horizontal,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 12, vertical: 8),
+                                    itemCount: safeBookmarks.length,
+                                    itemBuilder: (_, i) {
+                                      final bm = safeBookmarks[i];
+                                      final host = Uri.tryParse(bm.url)
+                                              ?.host
+                                              .replaceAll('www.', '') ??
+                                          bm.title;
+                                      return InkWell(
+                                        onTap: () {
+                                          Navigator.pop(overlayCtx);
+                                          _loadFromSearchBar(bm.url);
+                                        },
+                                        borderRadius: BorderRadius.circular(12),
+                                        child: SizedBox(
+                                          width: 74,
+                                          child: Column(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              CircleAvatar(
+                                                radius: 22,
+                                                backgroundColor:
+                                                    p.surfaceVariant,
+                                                child: Text(
+                                                  host.isNotEmpty
+                                                      ? host[0].toUpperCase()
+                                                      : 'W',
+                                                  style: TextStyle(
+                                                    color: p.accent,
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 16,
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(height: 6),
+                                              Text(
+                                                bm.title,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                textAlign: TextAlign.center,
+                                                style: TextStyle(
+                                                    fontSize: 11.5,
+                                                    color: p.text),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+
+                              // 4. DIRECT SEARCH OPTION WHEN TYPING
+                              if (q.isNotEmpty)
+                                ListTile(
+                                  leading: CircleAvatar(
+                                    radius: 18,
+                                    backgroundColor: p.surfaceVariant,
+                                    child: Icon(Icons.search,
+                                        size: 19, color: p.subtext),
+                                  ),
+                                  title: Text(
+                                    q,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(color: p.text),
+                                  ),
+                                  onTap: () {
+                                    Navigator.pop(overlayCtx);
+                                    _loadFromSearchBar(q);
+                                  },
+                                ),
+
+                              // 5. RECENT SEARCHES HEADER & LIST
+                              if (q.isEmpty && matchingRecent.isNotEmpty)
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.fromLTRB(16, 10, 16, 4),
+                                  child: Text(
+                                    'Recent searches',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: p.subtext,
+                                    ),
+                                  ),
+                                ),
+
+                              ...matchingRecent.map(
+                                (term) => ListTile(
+                                  contentPadding: const EdgeInsets.only(
+                                      left: 14, right: 6),
+                                  leading: CircleAvatar(
+                                    radius: 18,
+                                    backgroundColor: p.surfaceVariant,
+                                    child: Icon(Icons.history,
+                                        size: 19, color: p.subtext),
+                                  ),
+                                  title: Text(
+                                    term,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        fontSize: 14.5, color: p.text),
+                                  ),
+                                  trailing: IconButton(
+                                    icon: Icon(Icons.north_west,
+                                        size: 19, color: p.subtext),
+                                    onPressed: () {
+                                      searchCtrl.text = term;
+                                      searchCtrl.selection =
+                                          TextSelection.fromPosition(
+                                        TextPosition(
+                                            offset: searchCtrl.text.length),
+                                      );
+                                      setOverlayState(() {});
+                                    },
+                                  ),
+                                  onTap: () {
+                                    Navigator.pop(overlayCtx);
+                                    _loadFromSearchBar(term);
+                                  },
+                                  onLongPress: () async {
+                                    setState(
+                                        () => _recentSearches.remove(term));
+                                    setOverlayState(() {});
+                                    await _saveData();
+                                    _showToast('Removed from recent searches');
+                                  },
+                                ),
+                              ),
+
+                              // 6. MATCHING HISTORY WHEN TYPING
+                              ...matchingHistory.map(
+                                (item) => ListTile(
+                                  contentPadding: const EdgeInsets.only(
+                                      left: 14, right: 6),
+                                  leading: CircleAvatar(
+                                    radius: 18,
+                                    backgroundColor: p.surfaceVariant,
+                                    child: Icon(Icons.public,
+                                        size: 19, color: p.accent),
+                                  ),
+                                  title: Text(
+                                    item.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        fontSize: 14, color: p.text),
+                                  ),
+                                  subtitle: Text(
+                                    item.url,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        fontSize: 12, color: p.subtext),
+                                  ),
+                                  trailing: IconButton(
+                                    icon: Icon(Icons.north_west,
+                                        size: 19, color: p.subtext),
+                                    onPressed: () {
+                                      searchCtrl.text = item.url;
+                                      setOverlayState(() {});
+                                    },
+                                  ),
+                                  onTap: () {
+                                    Navigator.pop(overlayCtx);
+                                    _loadFromSearchBar(item.url);
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+            transitionsBuilder: (_, anim, __, child) =>
+                FadeTransition(opacity: anim, child: child),
+          ),
+        )
+        .whenComplete(() => searchCtrl.dispose());
+  }
+
+  // ===========================================================================
+  // PERMANENT IRREVERSIBLE SITE BLOCKER (ZERO LIST VISIBILITY)
+  // ===========================================================================
+  Future<void> _promptAddPermanentBlockedSite() async {
+    final p = ChromePalette.of(context, incognito: _isIncognito);
+    final ctrl = TextEditingController();
+
+    final enteredDomain = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: p.menuBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Text('Permanent Site Block',
+            style: TextStyle(fontSize: 17, color: p.text)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'जिस वेबसाइट को हमेशा के लिए ब्लॉक करना है उसका डोमेन लिखें:',
+              style: TextStyle(fontSize: 13, color: p.subtext),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              decoration: InputDecoration(
+                hintText: 'उदाहरण: example.com',
+                filled: true,
+                fillColor: p.bg,
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final clean = ctrl.text
+                  .trim()
+                  .toLowerCase()
+                  .replaceAll('https://', '')
+                  .replaceAll('http://', '')
+                  .replaceAll('www.', '')
+                  .replaceAll('m.', '')
+                  .split('/')
+                  .first
+                  .trim();
+              if (clean.length < 3 || !clean.contains('.')) {
+                _showToast('सही डोमेन लिखें (जैसे: site.com)');
+                return;
+              }
+              Navigator.pop(ctx, clean);
+            },
+            child: const Text('Next'),
+          ),
+        ],
+      ),
+    );
+
+    if (enteredDomain == null || !mounted) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: p.menuBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('पक्का हमेशा के लिए ब्लॉक करें?',
+            style: TextStyle(fontSize: 17, color: Colors.redAccent)),
+        content: Text(
+          '"$enteredDomain" को एक बार जोड़ने के बाद:\n\n'
+          '• यह इस ब्राउज़र में कभी दोबारा नहीं खुलेगी\n'
+          '• इसे कहीं से अनब्लॉक या देखा नहीं जा सकेगा\n'
+          '• यह Search Results से भी गायब हो जाएगी',
+          style: TextStyle(fontSize: 13.5, color: p.text),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Block Forever'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      if (!_permanentBlockedDomains.contains(enteredDomain)) {
+        _permanentBlockedDomains.add(enteredDomain);
+      }
+      _history.removeWhere((h) => _isUrlPermanentlyBlocked(h.url));
+      _bookmarks.removeWhere((b) => _isUrlPermanentlyBlocked(b.url));
+      _recentSearches.removeWhere((s) => _isUrlPermanentlyBlocked(s));
+      _recentlyClosedTabs.removeWhere((t) => _isUrlPermanentlyBlocked(t.url));
+      for (final t in _tabs) {
+        if (_isUrlPermanentlyBlocked(t.url)) {
+          t.url = _homepageUrl;
+          t.title = 'New Tab';
+        }
+      }
+    });
+
+    await _saveData();
+    await _injectFocusScripts();
+
+    if (_isUrlPermanentlyBlocked(_currentUrl)) {
+      _loadFromSearchBar(_homepageUrl);
+    } else {
+      _webController.reload();
+    }
+    _showToast('साइट हमेशा के लिए ब्लॉक कर दी गई है');
+  }
+
 
   // ===========================================================================
   // CHROME-STYLE 3-DOT POPUP MENU (LIGHT & DARK ADAPTIVE)
@@ -5942,6 +6630,53 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
                         ListView(
                           padding: const EdgeInsets.all(16),
                           children: [
+                                              Container(
+                              margin: const EdgeInsets.only(bottom: 16),
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: p.card,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                    color: Colors.redAccent.withAlpha(110)),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.block,
+                                      color: Colors.redAccent, size: 22),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Permanent Block (Forever)',
+                                          style: TextStyle(
+                                            fontSize: 14.5,
+                                            fontWeight: FontWeight.w600,
+                                            color: p.text,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'ब्लॉक की गई साइट्स न कभी खुलेंगी, न यहाँ दिखेंगी और न Search Results में आएंगी',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: p.subtext,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  FilledButton.tonal(
+                                    onPressed: _promptAddPermanentBlockedSite,
+                                    child: const Text('Add'),
+                                  ),
+                                ],
+                              ),
+                            ),
+
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
@@ -6325,58 +7060,44 @@ class _BrowserHomeScreenState extends State<BrowserHomeScreen> {
         body: SafeArea(
           child: Column(
             children: [
-              // TOP CHROME BAR
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                decoration: BoxDecoration(
-                  color: p.bg,
-                  border: Border(
-                    bottom: BorderSide(color: p.border, width: 0.8),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    IconButton(
-                      icon: Icon(Icons.home_outlined, size: 22, color: p.text),
-                      tooltip: 'Home',
-                      onPressed: () => _loadFromSearchBar(_homepageUrl),
-                    ),
-                    Expanded(
-                      child: Container(
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: p.addressBar,
-                          borderRadius: BorderRadius.circular(22),
-                        ),
-                        child: TextField(
-                          controller: _urlController,
-                          textInputAction: TextInputAction.go,
-                          onSubmitted: _loadFromSearchBar,
-                          style: TextStyle(fontSize: 14, color: p.text),
-                          decoration: InputDecoration(
-                            hintText: 'Search or type URL',
-                            hintStyle: TextStyle(color: p.subtext),
-                            prefixIcon: Icon(
-                              _isIncognito
-                                  ? Icons.visibility_off_outlined
-                                  : Icons.lock_outline,
-                              size: 16,
-                              color: p.accent,
-                            ),
-                            suffixIcon: IconButton(
-                              icon:
-                                  Icon(Icons.clear, size: 16, color: p.subtext),
-                              onPressed: () => _urlController.clear(),
-                            ),
-                            border: InputBorder.none,
-                            contentPadding:
-                                const EdgeInsets.symmetric(vertical: 10),
+              
+                                  Expanded(
+                      child: InkWell(
+                        onTap: _openChromeAddressBarOverlay,
+                        borderRadius: BorderRadius.circular(22),
+                        child: Container(
+                          height: 40,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: p.addressBar,
+                            borderRadius: BorderRadius.circular(22),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                _isIncognito
+                                    ? Icons.visibility_off_outlined
+                                    : Icons.lock_outline,
+                                size: 16,
+                                color: p.accent,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _formatDisplayUrl(_currentUrl),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style:
+                                      TextStyle(fontSize: 14.5, color: p.text),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 4),
+
+              
                     // Tab Counter Box [ 1 ]
                     InkWell(
                       onTap: _openFullScreenTabSwitcher,
